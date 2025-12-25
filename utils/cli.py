@@ -59,7 +59,12 @@ def load_args(config=None):
     parser.add_argument(
         "password_list",
         nargs="?",
-        help="Enter the file name for dictionary comparison."
+        help="Enter the file name for dictionary comparison (dict/rule modes)."
+    )
+    parser.add_argument(
+        "rules_file",
+        nargs="?",
+        help="Enter the rules file for rule-based attack (rule mode only)."
     )
 
     # Arguments specific to brute-force attack
@@ -116,6 +121,16 @@ def load_args(config=None):
         type=str,
         help="Path to the second wordlist for rule-based attack."
     )
+    parser.add_argument(
+        "--max-expansions-per-word",
+        type=int,
+        help="Cap rule expansions per base word (rule mode)."
+    )
+    parser.add_argument(
+        "--max-candidates",
+        type=int,
+        help="Global cap on total rule-generated candidates (rule mode)."
+    )
 
     # Handle Simulated Arguments Only When No CLI Arguments
     if config and len(sys.argv) <= 1:
@@ -125,6 +140,8 @@ def load_args(config=None):
                 simulated_args.append(f"--{value}")
             elif key in ["target_file", "password_list"] and value is not None:
                 simulated_args.append(value)
+            elif key == "rules" and value is not None:
+                simulated_args.extend(["--rules", value])
             elif value is not None:
                 simulated_args.extend([f"--{key}", str(value)])
         

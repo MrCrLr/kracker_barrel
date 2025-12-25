@@ -6,6 +6,7 @@ from tqdm import tqdm
 from core.hash_handler import crack_chunk
 from core.brut_gen import generate_brute_candidates, yield_brute_batches, get_brute_count
 from core.mask_gen import generate_mask_candidates, yield_maskbased_batches, get_mask_count
+from core.rules_gen import load_rules, apply_rules, yield_rule_batches, get_rule_count
 from utils.detector import Detector
 from utils.file_io import get_number_of_passwords, yield_dictionary_batches, validate_password_file, load_target_hash
 from utils.logger import PURPLE, GREEN, LIGHT_YELLOW, RESET
@@ -19,21 +20,81 @@ class Kracker:
         self.target_file = Path ("data") / args.target_file
         self.hash_digest_with_metadata = load_target_hash(self.target_file) # List of hashes to crack
         self.path_to_passwords = Path("refs") / args.password_list if args.password_list else None
+        self.rules_file = args.rules_file or args.rules
+        self.rule_wordlist = args.password_list or args.wordlist1
         self.mask_pattern = args.pattern # Mask-based attack
         self.custom_strings = args.custom if args.custom else None # Mask-based custom string to append
         self.brute_settings = dict(charset=args.charset if args.charset else None, min=args.min, max=args.max)
+        self.max_expansions_per_word = args.max_expansions_per_word
+        self.max_candidates = args.max_candidates
         self.workers = max(1, Detector.get_cpu_count() - 1)
         self.preload_limit = self.workers * 6
         self.batch_size = 2000  # Adjust batch size for performance
-        
+        self.rules = []
+        self.base_words_processed = 0
+        self.expanded_candidates = 0
+
         # Detect and initialize hash handler
         self.hash_type = Detector.detect(self.hash_digest_with_metadata)
         self.hash_handler = Detector.initialize(self.hash_digest_with_metadata, self.hash_type)
 
         self.manager = Manager()
-        self.start_time = time.time()
+        self.start_time = time.perf_counter()
         self.goal = len(self.hash_digest_with_metadata) # Number of hashes in file to crack
         self.found_flag = self.manager.dict(found=0, goal=self.goal, matches={})  # Global found_flag for stopping on goal match
+
+        if self.operation == "rule":
+            rules_path = self._resolve_rules_path(self.rules_file)
+            if not self.rule_wordlist:
+                raise ValueError("Rule mode requires a wordlist (password_list or --wordlist1).")
+            wordlist_path = self._resolve_wordlist_path(self.rule_wordlist)
+            if not rules_path:
+                raise ValueError("Rule mode requires a rules file (rules_file or --rules).")
+            if not wordlist_path:
+                raise ValueError(f"Rule wordlist not found: {self.rule_wordlist}")
+            if self.max_expansions_per_word is not None and self.max_expansions_per_word <= 0:
+                raise ValueError("--max-expansions-per-word must be a positive integer.")
+            if self.max_candidates is not None and self.max_candidates <= 0:
+                raise ValueError("--max-candidates must be a positive integer.")
+            self.rules_file = rules_path
+            self.path_to_passwords = wordlist_path
+            if not self._wordlist_has_entries(self.path_to_passwords):
+                raise ValueError("Rule wordlist is empty.")
+            self.rules = load_rules(rules_path)
+            if not self.rules:
+                raise ValueError("Rule mode requires at least one rule.")
+
+    @staticmethod
+    def _resolve_wordlist_path(wordlist_name):
+        if not wordlist_name:
+            return None
+        candidate = Path(wordlist_name)
+        if candidate.exists():
+            return candidate
+        candidate = Path("refs") / wordlist_name
+        if candidate.exists():
+            return candidate
+        return None
+
+    @staticmethod
+    def _resolve_rules_path(rules_name):
+        if not rules_name:
+            return None
+        candidate = Path(rules_name)
+        if candidate.exists():
+            return candidate
+        candidate = Path("refs") / rules_name
+        if candidate.exists():
+            return candidate
+        candidate = Path("core") / rules_name
+        if candidate.exists():
+            return candidate
+        return None
+
+    @staticmethod
+    def _wordlist_has_entries(wordlist_path):
+        with Path(wordlist_path).open("r", encoding="latin-1", errors="replace") as file:
+            return any(line.strip() for line in file)
 
 
 class BatchManager:
@@ -65,10 +126,40 @@ class BatchManager:
             self.total_passwords = get_mask_count(self.kracker.mask_pattern, self.kracker.custom_strings)
 
         elif self.kracker.operation == "rule":
-            pass
+            if not self.kracker.path_to_passwords or not self.kracker.rules:
+                raise ValueError("Rule mode requires a wordlist and at least one rule.")
+            generator = self._generate_rule_candidates()
+            self.batch_generator = yield_rule_batches(generator, self.kracker.batch_size)
+            self.total_passwords = get_rule_count(
+                self.kracker.path_to_passwords,
+                self.kracker.rules,
+                max_expansions_per_word=self.kracker.max_expansions_per_word,
+                max_candidates=self.kracker.max_candidates,
+            )
 
         self.max_batches = -(-self.total_passwords // self.kracker.batch_size)
         self.rem_batches = self.max_batches
+
+    def _generate_rule_candidates(self):
+        max_expansions = self.kracker.max_expansions_per_word
+        max_candidates = self.kracker.max_candidates
+        generated = 0
+        with self.kracker.path_to_passwords.open("r", encoding="latin-1", errors="replace") as file:
+            for line in file:
+                word = line.strip()
+                if not word:
+                    continue
+                self.kracker.base_words_processed += 1
+                per_word_count = 0
+                for transformed in apply_rules(word, self.kracker.rules):
+                    if max_expansions is not None and per_word_count >= max_expansions:
+                        break
+                    yield transformed.encode("utf-8")
+                    per_word_count += 1
+                    generated += 1
+                    self.kracker.expanded_candidates += 1
+                    if max_candidates is not None and generated >= max_candidates:
+                        return
 
 
     def preload_batches(self):
@@ -105,7 +196,11 @@ class Workers:
     def run(self):
         """Main loop to process password batches and handle matches."""
         print(self.reporter)  # Calls the __str__ method to print the configuration
-        self.batch_man.initialize_batch_generator()
+        try:
+            self.batch_man.initialize_batch_generator()
+        except (NotImplementedError, ValueError) as exc:
+            print(f"{LIGHT_YELLOW}{exc}{RESET}")
+            return
 
         try:
             with ProcessPoolExecutor(max_workers=self.kracker.workers) as executor:
@@ -175,13 +270,13 @@ class Workers:
             self.reporter.summary_log["total_count"] += chunk_count
 
             # Process all matches in the results list
-            for target_hash, pwned_pwd  in results:
+            for target_hash, pwned_pwd in results.items():
                 matches = self.kracker.found_flag["matches"]
-                matches[target_hash] = pwned_pwd
-                self.kracker.found_flag["matches"] = matches
-
-                tqdm.write(f"{GREEN}[MATCH!] --> {pwned_pwd} --> {target_hash}{RESET}")
-                self.kracker.found_flag["found"] += 1
+                if target_hash not in matches:
+                    matches[target_hash] = pwned_pwd
+                    self.kracker.found_flag["matches"] = matches
+                    tqdm.write(f"{GREEN}[MATCH!] --> {pwned_pwd} --> {target_hash}{RESET}")
+                    self.kracker.found_flag["found"] += 1
 
             return True, chunk_count
         

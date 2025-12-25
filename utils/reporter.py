@@ -1,6 +1,7 @@
 import os, time
 from core.brut_gen import get_brute_count
 from core.mask_gen import get_mask_count
+from core.rules_gen import get_rule_count
 from utils.logger import display_summary, PURPLE, RESET
 from utils.file_io import get_number_of_passwords
 
@@ -20,7 +21,7 @@ class Reporter:
             f"  Password list: {self.kracker.path_to_passwords}\n"
             f"  Batch size: {self.kracker.batch_size}\n"
             f"  Logical cores: {os.cpu_count()}\n"
-            f"  Workers: {self.summary_log["workers"]}\n"
+            f"  Workers: {self.summary_log['workers']}\n"
             f"  Process PID: {os.getpid()}\n"
             f"  Preload limit: {self.kracker.preload_limit}\n"
         )
@@ -34,7 +35,10 @@ class Reporter:
         elif self.kracker.operation == "mask":
             number_of_passwords = get_mask_count(self.kracker.mask_pattern, self.kracker.custom_strings)
         elif self.kracker.operation == "rule":
-            number_of_passwords = 1
+            if self.kracker.path_to_passwords and self.kracker.rules:
+                number_of_passwords = get_rule_count(self.kracker.path_to_passwords, self.kracker.rules)
+            else:
+                number_of_passwords = 0
 
         total_batches = (number_of_passwords // self.kracker.batch_size) + 1
         
@@ -49,6 +53,8 @@ class Reporter:
             "batch_size": self.kracker.batch_size,
             "items": number_of_passwords,
             "total_count": 0,
+            "base_words_processed": None,
+            "expanded_candidates": None,
         }
 
 
@@ -76,5 +82,8 @@ class Reporter:
                 "match found in word list."
             )
 
-        self.summary_log["elapsed_time"] = time.time() - self.kracker.start_time
+        self.summary_log["elapsed_time"] = time.perf_counter() - self.kracker.start_time
+        if self.kracker.operation == "rule":
+            self.summary_log["base_words_processed"] = self.kracker.base_words_processed
+            self.summary_log["expanded_candidates"] = self.kracker.expanded_candidates
         display_summary(self.kracker.found_flag, self.summary_log)

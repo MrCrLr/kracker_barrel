@@ -42,6 +42,12 @@ Kracker Barrel is a high-performance password-recovery tool built for speed, fle
    pip install -r requirements.txt
    ```
 
+## **Development Quick Check**
+
+```bash
+uv sync && uv run python tests/smoke_test.py
+```
+
 ---
 
 ## **Usage**
@@ -169,4 +175,3 @@ Enable the `--test_mode` or `-t` flag to create test hashes with reduced computa
 ## **License**
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
-

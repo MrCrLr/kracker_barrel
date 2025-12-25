@@ -51,13 +51,13 @@ def parse_int_list(value):
 def default_workers(hash_type):
     cpu_count = os.cpu_count() or 1
     expensive_hashes = {"bcrypt", "argon", "scrypt", "pbkdf2"}
-    cap = 4 if hash_type in expensive_hashes else 8
+    cap = 4 if hash_type in expensive_hashes else 6
     return min(cpu_count, cap)
 
 
 def default_batch_size(hash_type):
     expensive_hashes = {"bcrypt", "argon", "scrypt", "pbkdf2"}
-    return 1000 if hash_type in expensive_hashes else 50000
+    return 1000 if hash_type in expensive_hashes else 20000
 
 
 def run_bench(hash_type, batch_size, workers, candidates_count):

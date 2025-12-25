@@ -105,14 +105,14 @@ class Kracker:
         if self.batch_size is not None and self.batch_size <= 0:
             raise ValueError("--batch-size must be a positive integer.")
         if self.workers is None:
-            cap = 4 if self.hash_type in expensive_hashes else 8
+            cap = 4 if self.hash_type in expensive_hashes else 6
             self.workers = min(cpu_count, cap)
             self.workers_defaulted = True
         if self.batch_size is None:
             if self.hash_type in expensive_hashes:
                 self.batch_size = 1000
             else:
-                self.batch_size = 50000
+                self.batch_size = 20000
             self.batch_size_defaulted = True
 
     @staticmethod

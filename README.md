@@ -59,12 +59,12 @@ uv run python bench.py --hash-type md5 --workers 4 --batch-size 20000 --candidat
 
 Sweep mode to find the best combo:
 ```bash
-uv run python bench.py --sweep --hash-type md5 --workers-list 1,2,4 --batch-sizes 200,2000,20000 --candidates 50000
+uv run python bench.py --sweep --hash-type md5 --workers-list 1,2,4,6 --batch-sizes 200,2000,20000 --candidates 50000
 ```
 
 Optional CSV export:
 ```bash
-uv run python bench.py --sweep --hash-type md5 --workers-list 1,2,4 --batch-sizes 200,2000,20000 --candidates 50000 --csv bench.csv
+uv run python bench.py --sweep --hash-type md5 --workers-list 1,2,4,6 --batch-sizes 200,2000,20000 --candidates 50000 --csv bench.csv
 ```
 
 ---

@@ -6,7 +6,7 @@ from tqdm import tqdm
 from core.hash_handler import crack_chunk
 from core.brut_gen import generate_brute_candidates, yield_brute_batches, get_brute_count
 from core.mask_gen import generate_mask_candidates, yield_maskbased_batches, get_mask_count
-from core.rules_gen import load_rules, generate_rule_candidates, yield_rule_batches, get_rule_count
+from core.rules_gen import load_rules, apply_rules, yield_rule_batches, get_rule_count
 from utils.detector import Detector
 from utils.file_io import get_number_of_passwords, yield_dictionary_batches, validate_password_file, load_target_hash
 from utils.logger import PURPLE, GREEN, LIGHT_YELLOW, RESET
@@ -25,10 +25,14 @@ class Kracker:
         self.mask_pattern = args.pattern # Mask-based attack
         self.custom_strings = args.custom if args.custom else None # Mask-based custom string to append
         self.brute_settings = dict(charset=args.charset if args.charset else None, min=args.min, max=args.max)
+        self.max_expansions_per_word = args.max_expansions_per_word
+        self.max_candidates = args.max_candidates
         self.workers = max(1, Detector.get_cpu_count() - 1)
         self.preload_limit = self.workers * 6
         self.batch_size = 2000  # Adjust batch size for performance
         self.rules = []
+        self.base_words_processed = 0
+        self.expanded_candidates = 0
 
         # Detect and initialize hash handler
         self.hash_type = Detector.detect(self.hash_digest_with_metadata)
@@ -48,9 +52,17 @@ class Kracker:
                 raise ValueError("Rule mode requires a rules file (rules_file or --rules).")
             if not wordlist_path:
                 raise ValueError(f"Rule wordlist not found: {self.rule_wordlist}")
+            if self.max_expansions_per_word is not None and self.max_expansions_per_word <= 0:
+                raise ValueError("--max-expansions-per-word must be a positive integer.")
+            if self.max_candidates is not None and self.max_candidates <= 0:
+                raise ValueError("--max-candidates must be a positive integer.")
             self.rules_file = rules_path
             self.path_to_passwords = wordlist_path
+            if not self._wordlist_has_entries(self.path_to_passwords):
+                raise ValueError("Rule wordlist is empty.")
             self.rules = load_rules(rules_path)
+            if not self.rules:
+                raise ValueError("Rule mode requires at least one rule.")
 
     @staticmethod
     def _resolve_wordlist_path(wordlist_name):
@@ -78,6 +90,11 @@ class Kracker:
         if candidate.exists():
             return candidate
         return None
+
+    @staticmethod
+    def _wordlist_has_entries(wordlist_path):
+        with Path(wordlist_path).open("r", encoding="latin-1", errors="replace") as file:
+            return any(line.strip() for line in file)
 
 
 class BatchManager:
@@ -111,12 +128,38 @@ class BatchManager:
         elif self.kracker.operation == "rule":
             if not self.kracker.path_to_passwords or not self.kracker.rules:
                 raise ValueError("Rule mode requires a wordlist and at least one rule.")
-            generator = generate_rule_candidates(self.kracker.path_to_passwords, self.kracker.rules)
+            generator = self._generate_rule_candidates()
             self.batch_generator = yield_rule_batches(generator, self.kracker.batch_size)
-            self.total_passwords = get_rule_count(self.kracker.path_to_passwords, self.kracker.rules)
+            self.total_passwords = get_rule_count(
+                self.kracker.path_to_passwords,
+                self.kracker.rules,
+                max_expansions_per_word=self.kracker.max_expansions_per_word,
+                max_candidates=self.kracker.max_candidates,
+            )
 
         self.max_batches = -(-self.total_passwords // self.kracker.batch_size)
         self.rem_batches = self.max_batches
+
+    def _generate_rule_candidates(self):
+        max_expansions = self.kracker.max_expansions_per_word
+        max_candidates = self.kracker.max_candidates
+        generated = 0
+        with self.kracker.path_to_passwords.open("r", encoding="latin-1", errors="replace") as file:
+            for line in file:
+                word = line.strip()
+                if not word:
+                    continue
+                self.kracker.base_words_processed += 1
+                per_word_count = 0
+                for transformed in apply_rules(word, self.kracker.rules):
+                    if max_expansions is not None and per_word_count >= max_expansions:
+                        break
+                    yield transformed.encode("utf-8")
+                    per_word_count += 1
+                    generated += 1
+                    self.kracker.expanded_candidates += 1
+                    if max_candidates is not None and generated >= max_candidates:
+                        return
 
 
     def preload_batches(self):

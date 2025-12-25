@@ -90,9 +90,20 @@ def yield_rule_batches(generator: Iterable[bytes], batch_size: int) -> Iterator[
         yield batch
 
 
-def get_rule_count(wordlist_path: Path, rules: list[Rule]) -> int:
+def get_rule_count(
+    wordlist_path: Path,
+    rules: list[Rule],
+    max_expansions_per_word: Optional[int] = None,
+    max_candidates: Optional[int] = None,
+) -> int:
     if not rules:
         return 0
     with Path(wordlist_path).open("r", encoding="latin-1", errors="replace") as file:
         word_count = sum(1 for _ in file)
-    return word_count * len(rules)
+    expansions_per_word = len(rules)
+    if max_expansions_per_word is not None:
+        expansions_per_word = min(expansions_per_word, max_expansions_per_word)
+    total = word_count * expansions_per_word
+    if max_candidates is not None:
+        total = min(total, max_candidates)
+    return total

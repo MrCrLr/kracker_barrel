@@ -71,6 +71,10 @@ def display_summary(found_flag, summary_log):
     logging.info(f"{'Workers:':<25}{summary_log['workers']}")
     logging.info(f"{'Batches:':<25}{summary_log['batches']}")
     logging.info(f"{'Batch size:':<25}{summary_log['batch_size']}")
+    if summary_log.get("base_words_processed") is not None:
+        logging.info(f"{'Base words:':<25}{summary_log['base_words_processed']}")
+    if summary_log.get("expanded_candidates") is not None:
+        logging.info(f"{'Expanded candidates:':<25}{summary_log['expanded_candidates']}")
     logging.info(f"{'Items verified:':<25}{summary_log['total_count']}")
     logging.info(f"{'Items on list:':<25}{summary_log['items']}")
     logging.info(f"{'Elapsed time:':<25}{summary_log['elapsed_time']:.1f} seconds")
@@ -84,6 +88,10 @@ def display_summary(found_flag, summary_log):
     print(f"{'Workers:':<25}{summary_log['workers']}")
     print(f"{'Batches:':<25}{summary_log['batches']}")
     print(f"{'Batch size:':<25}{summary_log['batch_size']}")
+    if summary_log.get("base_words_processed") is not None:
+        print(f"{'Base words:':<25}{summary_log['base_words_processed']}")
+    if summary_log.get("expanded_candidates") is not None:
+        print(f"{'Expanded candidates:':<25}{summary_log['expanded_candidates']}")
     print(f"{'Items verified:':<25}{summary_log['total_count']}")
     print(f"{'Items on list:':<25}{summary_log['items']}")
     print(f"{'Elapsed time:':<25}{summary_log['elapsed_time']:.1f} seconds\n")

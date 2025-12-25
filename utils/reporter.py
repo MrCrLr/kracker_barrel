@@ -53,6 +53,8 @@ class Reporter:
             "batch_size": self.kracker.batch_size,
             "items": number_of_passwords,
             "total_count": 0,
+            "base_words_processed": None,
+            "expanded_candidates": None,
         }
 
 
@@ -81,4 +83,7 @@ class Reporter:
             )
 
         self.summary_log["elapsed_time"] = time.perf_counter() - self.kracker.start_time
+        if self.kracker.operation == "rule":
+            self.summary_log["base_words_processed"] = self.kracker.base_words_processed
+            self.summary_log["expanded_candidates"] = self.kracker.expanded_candidates
         display_summary(self.kracker.found_flag, self.summary_log)

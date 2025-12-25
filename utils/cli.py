@@ -61,6 +61,11 @@ def load_args(config=None):
         nargs="?",
         help="Enter the file name for dictionary comparison."
     )
+    parser.add_argument(
+        "rules_file",
+        nargs="?",
+        help="Enter the rules file for rule-based attack."
+    )
 
     # Arguments specific to brute-force attack
     parser.add_argument(
@@ -123,7 +128,7 @@ def load_args(config=None):
         for key, value in config.items():
             if key == "operation":
                 simulated_args.append(f"--{value}")
-            elif key in ["target_file", "password_list"] and value is not None:
+            elif key in ["target_file", "password_list", "rules"] and value is not None:
                 simulated_args.append(value)
             elif value is not None:
                 simulated_args.extend([f"--{key}", str(value)])

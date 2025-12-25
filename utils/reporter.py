@@ -1,6 +1,7 @@
 import os, time
 from core.brut_gen import get_brute_count
 from core.mask_gen import get_mask_count
+from core.rules_gen import get_rule_count
 from utils.logger import display_summary, PURPLE, RESET
 from utils.file_io import get_number_of_passwords
 
@@ -34,7 +35,10 @@ class Reporter:
         elif self.kracker.operation == "mask":
             number_of_passwords = get_mask_count(self.kracker.mask_pattern, self.kracker.custom_strings)
         elif self.kracker.operation == "rule":
-            number_of_passwords = 1
+            if self.kracker.path_to_passwords and self.kracker.rules:
+                number_of_passwords = get_rule_count(self.kracker.path_to_passwords, self.kracker.rules)
+            else:
+                number_of_passwords = 0
 
         total_batches = (number_of_passwords // self.kracker.batch_size) + 1
         

@@ -1,118 +1,98 @@
-import itertools
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Iterable, Iterator, Optional
 
 
-def load_rules(rules_file):
+@dataclass(frozen=True)
+class Rule:
+    name: str
+    value: Optional[str] = None
+
+
+def _strip_comment(line: str) -> str:
+    return line.split("#", 1)[0].strip()
+
+
+def load_rules(rules_file: Path) -> list[Rule]:
     """
     Load transformation rules from a file.
-    Returns a list of rules.
+    Returns a list of Rule objects in file order.
     """
-    with open(rules_file, "r") as file:
-        return [line.strip() for line in file if line.strip() and not line.startswith("#")]  # Ignore empty lines and comments
-    
+    rules: list[Rule] = []
+    with Path(rules_file).open("r", encoding="utf-8") as file:
+        for raw_line in file:
+            line = _strip_comment(raw_line)
+            if not line:
+                continue
+            parts = line.split(maxsplit=1)
+            name = parts[0].upper()
+            value = parts[1] if len(parts) > 1 else None
+            rules.append(Rule(name=name, value=value))
+    return rules
 
-def apply_rules(word, rules):
-    """
-    Apply transformation rules to a word based on the rules file.
-    Returns a set of transformed words.
-    """
-    transformations = set()
 
+def apply_rule(word: str, rule: Rule) -> Iterable[str]:
+    if rule.name == "APPEND":
+        if rule.value is None:
+            raise ValueError("APPEND rule requires a value.")
+        return [word + rule.value]
+    if rule.name == "PREPEND":
+        if rule.value is None:
+            raise ValueError("PREPEND rule requires a value.")
+        return [rule.value + word]
+    if rule.name == "CAPITALIZE":
+        return [word.capitalize()]
+    if rule.name == "REVERSE":
+        return [word[::-1]]
+    if rule.name == "LEETSPEAK":
+        leetspeak = (
+            word.replace("a", "@")
+            .replace("o", "0")
+            .replace("e", "3")
+            .replace("i", "1")
+            .replace("s", "$")
+        )
+        return [leetspeak]
+    raise ValueError(f"Unknown rule: {rule.name}")
+
+
+def apply_rules(word: str, rules: list[Rule]) -> Iterable[str]:
+    """
+    Apply transformation rules to a word in rule order.
+    Returns a de-duplicated iterable while preserving order.
+    """
+    seen: dict[str, None] = {}
     for rule in rules:
-        if rule.startswith("APPEND "):  # Append a string
-            to_append = rule.split(" ", 1)[1]
-            transformations.add(word + to_append)
-        elif rule.startswith("PREPEND "):  # Prepend a string
-            to_prepend = rule.split(" ", 1)[1]
-            transformations.add(to_prepend + word)
-        elif rule == "CAPITALIZE":  # Capitalize the first letter
-            transformations.add(word.capitalize())
-        elif rule == "REVERSE":  # Reverse the word
-            transformations.add(word[::-1])
-        elif rule == "LEETSPEAK":  # Replace common characters with leetspeak
-            leetspeak = word.replace("a", "@").replace("o", "0").replace("e", "3").replace("i", "1").replace("s", "$")
-            transformations.add(leetspeak)
-        else:
-            print(f"Unknown rule: {rule}")
-
-    return transformations
+        for transformed in apply_rule(word, rule):
+            if transformed not in seen:
+                seen[transformed] = None
+    return seen.keys()
 
 
-# Combine wordlists and apply rules
-def combine_wordlists_with_rules(wordlist1, wordlist2=None, output_file="combined_with_rules.txt"):
-    """
-    Combine two wordlists and apply transformation rules to each word.
-    Save results to the output file.
-    """
-    combined = set()
-
-    # Load wordlists
-    with open(wordlist1, "r") as file1:
-        words1 = [line.strip() for line in file1]
-    words2 = []
-    if wordlist2:
-        with open(wordlist2, "r") as file2:
-            words2 = [line.strip() for line in file2]
-
-    # Combine wordlists (if wordlist2 exists)
-    if wordlist2:
-        for word1, word2 in itertools.product(words1, words2):
-            combined.add(f"{word1}{word2}")  # Simple concatenation
-            combined.add(f"{word1}-{word2}")  # Hyphenated combination
-    else:
-        combined.update(words1)  # Use only words from wordlist1
-
-    # Apply rules to combined words
-    all_transformed = set()
-    for word in combined:
-        all_transformed.update(apply_rules(word))
-
-    # Save results to the output file
-    with open(output_file, "w") as output:
-        for transformed_word in all_transformed:
-            output.write(transformed_word + "\n")
-
-    print(f"Combined and transformed wordlist saved to '{output_file}'.")
-
-# Example usage
-combine_wordlists_with_rules("../refs/500-worst-passwords.txt", "../refs/500-worst-passwords.txt")
+def generate_rule_candidates(wordlist_path: Path, rules: list[Rule]) -> Iterator[bytes]:
+    with Path(wordlist_path).open("r", encoding="latin-1", errors="replace") as file:
+        for line in file:
+            word = line.strip()
+            if not word:
+                continue
+            for transformed in apply_rules(word, rules):
+                yield transformed.encode("utf-8")
 
 
-
-def generate_candidates(wordlist1, rules, wordlist2=None):
-    """
-    Generate password candidates by applying rules to words from wordlists.
-    """
-    for word1 in wordlist1:
-        # Apply transformations to words from wordlist1
-        for transformed in apply_rules(word1, rules):
-            yield transformed
-
-        # Combine with wordlist2 (if provided)
-        if wordlist2:
-            for word2 in wordlist2:
-                yield f"{word1}{word2}"
-                yield f"{word2}{word1}"
+def yield_rule_batches(generator: Iterable[bytes], batch_size: int) -> Iterator[list[bytes]]:
+    batch: list[bytes] = []
+    for candidate in generator:
+        batch.append(candidate)
+        if len(batch) >= batch_size:
+            yield batch
+            batch = []
+    if batch:
+        yield batch
 
 
-def rule_based_attack(config):
-    """
-    Perform a rule-based attack using the configuration.
-    """
-    # Load inputs
-    raise NotImplementedError("Rule-based attack is not implemented yet.")
-
-
-def load_wordlist(_path):
-    raise NotImplementedError("Rule-based attack helpers are not implemented yet.")
-
-
-def load_hashes(_path):
-    raise NotImplementedError("Rule-based attack helpers are not implemented yet.")
-
-
-def verify_candidates(_candidates, _target_hashes, _hash_type):
-    raise NotImplementedError("Rule-based attack helpers are not implemented yet.")
-
-
-if __name__ == "__main__":
-    combine_wordlists_with_rules("../refs/500-worst-passwords.txt", "../refs/500-worst-passwords.txt")
+def get_rule_count(wordlist_path: Path, rules: list[Rule]) -> int:
+    if not rules:
+        return 0
+    with Path(wordlist_path).open("r", encoding="latin-1", errors="replace") as file:
+        word_count = sum(1 for _ in file)
+    return word_count * len(rules)

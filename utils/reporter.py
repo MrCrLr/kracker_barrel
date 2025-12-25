@@ -20,7 +20,7 @@ class Reporter:
             f"  Password list: {self.kracker.path_to_passwords}\n"
             f"  Batch size: {self.kracker.batch_size}\n"
             f"  Logical cores: {os.cpu_count()}\n"
-            f"  Workers: {self.summary_log["workers"]}\n"
+            f"  Workers: {self.summary_log['workers']}\n"
             f"  Process PID: {os.getpid()}\n"
             f"  Preload limit: {self.kracker.preload_limit}\n"
         )
@@ -76,5 +76,5 @@ class Reporter:
                 "match found in word list."
             )
 
-        self.summary_log["elapsed_time"] = time.time() - self.kracker.start_time
+        self.summary_log["elapsed_time"] = time.perf_counter() - self.kracker.start_time
         display_summary(self.kracker.found_flag, self.summary_log)

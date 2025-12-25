@@ -7,21 +7,15 @@ import sys
 def load_target_hash(target_filepath):
     try:
         with target_filepath.open("r") as file:
-            lines = file.readlines()
-            if len(lines) == 0:
+            lines = [line.strip() for line in file.readlines()]
+            lines = [line for line in lines if line]
+            if not lines:
                 logging.warning("Empty file. Nothing to read.")
-                return None
-            elif len(lines) == 1:
-                hash_digest_with_metadata = lines[0].strip()  # Single hash
-                return [hash_digest_with_metadata]  # Return as a list
-            else:
-                multihash_digest = [line.strip() for line in lines]  # Multiple hashes
-                return multihash_digest
+                return []
+            return lines
     except FileNotFoundError:
         logging.error("Error: Target file not found.")
         sys.exit(1)
-    
-    return hash_digest_with_metadata
 
 def validate_password_file(path_to_passwords):
     invalid_lines = []

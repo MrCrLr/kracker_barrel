@@ -25,13 +25,23 @@ class Detector:
         Returns:
             str: The detected hash type.
         """
-        try:
-            type_check = hash_metadata[0].split("$", 2)[1]
-            return Detector.HASH_MAP[type_check]
-        except (KeyError, IndexError):
-            raise ValueError(
-                f"Unknown or malformed hash format. Available types: {', '.join(Detector.HASH_MAP.keys())}"
-            )
+        if not hash_metadata:
+            raise ValueError("No hashes provided for detection.")
+
+        sample = hash_metadata[0].strip()
+        if "$" in sample:
+            try:
+                type_check = sample.split("$", 2)[1]
+                return Detector.HASH_MAP[type_check]
+            except (KeyError, IndexError):
+                raise ValueError(
+                    f"Unknown or malformed hash format. Available types: {', '.join(Detector.HASH_MAP.keys())}"
+                )
+
+        raise ValueError(
+            "Raw hex digests are not supported. Expected formats like $argon2id$, $pbkdf2$, "
+            "$scrypt$, $2b$, $ntlm$, $md5$, $sha256$, or $sha512$."
+        )
 
 
     @staticmethod

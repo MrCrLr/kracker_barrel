@@ -31,7 +31,7 @@ class Kracker:
         self.hash_handler = Detector.initialize(self.hash_digest_with_metadata, self.hash_type)
 
         self.manager = Manager()
-        self.start_time = time.time()
+        self.start_time = time.perf_counter()
         self.goal = len(self.hash_digest_with_metadata) # Number of hashes in file to crack
         self.found_flag = self.manager.dict(found=0, goal=self.goal, matches={})  # Global found_flag for stopping on goal match
 
@@ -65,7 +65,7 @@ class BatchManager:
             self.total_passwords = get_mask_count(self.kracker.mask_pattern, self.kracker.custom_strings)
 
         elif self.kracker.operation == "rule":
-            pass
+            raise NotImplementedError("Rule mode is not implemented yet.")
 
         self.max_batches = -(-self.total_passwords // self.kracker.batch_size)
         self.rem_batches = self.max_batches
@@ -105,7 +105,11 @@ class Workers:
     def run(self):
         """Main loop to process password batches and handle matches."""
         print(self.reporter)  # Calls the __str__ method to print the configuration
-        self.batch_man.initialize_batch_generator()
+        try:
+            self.batch_man.initialize_batch_generator()
+        except NotImplementedError as exc:
+            print(f"{LIGHT_YELLOW}{exc}{RESET}")
+            return
 
         try:
             with ProcessPoolExecutor(max_workers=self.kracker.workers) as executor:
@@ -175,13 +179,13 @@ class Workers:
             self.reporter.summary_log["total_count"] += chunk_count
 
             # Process all matches in the results list
-            for target_hash, pwned_pwd  in results:
+            for target_hash, pwned_pwd in results.items():
                 matches = self.kracker.found_flag["matches"]
-                matches[target_hash] = pwned_pwd
-                self.kracker.found_flag["matches"] = matches
-
-                tqdm.write(f"{GREEN}[MATCH!] --> {pwned_pwd} --> {target_hash}{RESET}")
-                self.kracker.found_flag["found"] += 1
+                if target_hash not in matches:
+                    matches[target_hash] = pwned_pwd
+                    self.kracker.found_flag["matches"] = matches
+                    tqdm.write(f"{GREEN}[MATCH!] --> {pwned_pwd} --> {target_hash}{RESET}")
+                    self.kracker.found_flag["found"] += 1
 
             return True, chunk_count
         

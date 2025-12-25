@@ -99,17 +99,20 @@ def rule_based_attack(config):
     Perform a rule-based attack using the configuration.
     """
     # Load inputs
-    rules = load_rules(config["rules"])
-    wordlist1 = load_wordlist(config["wordlist1"])
-    wordlist2 = load_wordlist(config["wordlist2"]) if "wordlist2" in config else None
-    target_hashes = load_hashes(config["target_file"])
+    raise NotImplementedError("Rule-based attack is not implemented yet.")
 
-    # Generate candidates
-    candidates = generate_candidates(wordlist1, rules, wordlist2)
 
-    # Verify candidates
-    matches = list(verify_candidates(candidates, target_hashes, config["hash_type"]))
-    if matches:
-        print("Matches found:", matches)
-    else:
-        print("No matches found.")
+def load_wordlist(_path):
+    raise NotImplementedError("Rule-based attack helpers are not implemented yet.")
+
+
+def load_hashes(_path):
+    raise NotImplementedError("Rule-based attack helpers are not implemented yet.")
+
+
+def verify_candidates(_candidates, _target_hashes, _hash_type):
+    raise NotImplementedError("Rule-based attack helpers are not implemented yet.")
+
+
+if __name__ == "__main__":
+    combine_wordlists_with_rules("../refs/500-worst-passwords.txt", "../refs/500-worst-passwords.txt")

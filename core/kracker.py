@@ -27,14 +27,17 @@ class Kracker:
         self.brute_settings = dict(charset=args.charset if args.charset else None, min=args.min, max=args.max)
         self.max_expansions_per_word = args.max_expansions_per_word
         self.max_candidates = args.max_candidates
-        self.workers = max(1, Detector.get_cpu_count() - 1)
-        self.batch_size = 2000  # Adjust batch size for performance
+        self.workers = args.workers
+        self.batch_size = args.batch_size
+        self.workers_defaulted = False
+        self.batch_size_defaulted = False
         self.rules = []
         self.base_words_processed = 0
         self.expanded_candidates = 0
 
         # Detect and initialize hash handler
         self.hash_type = Detector.detect(self.hash_digest_with_metadata)
+        self._set_defaults()
         self.hash_handler = Detector.initialize(self.hash_digest_with_metadata, self.hash_type)
         self.preload_limit = self._get_preload_limit()
 
@@ -92,10 +95,25 @@ class Kracker:
         return None
 
     def _get_preload_limit(self):
-        cheap_hashes = {"md5", "sha256", "sha512", "ntlm"}
-        if self.hash_type in cheap_hashes:
-            return self.workers * 2
-        return self.workers * 4
+        return self.workers * 2
+
+    def _set_defaults(self):
+        cpu_count = Detector.get_cpu_count()
+        expensive_hashes = {"bcrypt", "argon", "scrypt", "pbkdf2"}
+        if self.workers is not None and self.workers <= 0:
+            raise ValueError("--workers must be a positive integer.")
+        if self.batch_size is not None and self.batch_size <= 0:
+            raise ValueError("--batch-size must be a positive integer.")
+        if self.workers is None:
+            cap = 4 if self.hash_type in expensive_hashes else 8
+            self.workers = min(cpu_count, cap)
+            self.workers_defaulted = True
+        if self.batch_size is None:
+            if self.hash_type in expensive_hashes:
+                self.batch_size = 1000
+            else:
+                self.batch_size = 50000
+            self.batch_size_defaulted = True
 
     @staticmethod
     def _wordlist_has_entries(wordlist_path):
@@ -152,6 +170,8 @@ class BatchManager:
         generated = 0
         with self.kracker.path_to_passwords.open("r", encoding="latin-1", errors="replace") as file:
             for line in file:
+                if self.kracker.stop_event.is_set():
+                    return
                 word = line.strip()
                 if not word:
                     continue
@@ -175,6 +195,8 @@ class BatchManager:
         """
         try:
             while not self.batch_queue.full():
+                if self.kracker.stop_event.is_set():
+                    return
                 batch = next(self.batch_generator)
                 self.batch_queue.put(batch)
                 self.rem_batches -= 1

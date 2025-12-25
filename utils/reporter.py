@@ -13,15 +13,21 @@ class Reporter:
 
 
     def __str__(self):
+        workers_label = str(self.kracker.workers)
+        batch_label = str(self.kracker.batch_size)
+        if self.kracker.workers_defaulted:
+            workers_label += " (default)"
+        if self.kracker.batch_size_defaulted:
+            batch_label += " (default)"
         return (
             f"\n{PURPLE}Kracker Configuration:{RESET}\n"
             f"  Operation: {self.kracker.operation}\n"
             f"  Target: {self.kracker.target_file}\n"
             f"  Hash type: {self.kracker.hash_type}\n"
             f"  Password list: {self.kracker.path_to_passwords}\n"
-            f"  Batch size: {self.kracker.batch_size}\n"
+            f"  Batch size: {batch_label}\n"
             f"  Logical cores: {os.cpu_count()}\n"
-            f"  Workers: {self.summary_log['workers']}\n"
+            f"  Workers: {workers_label}\n"
             f"  Process PID: {os.getpid()}\n"
             f"  Preload limit: {self.kracker.preload_limit}\n"
         )

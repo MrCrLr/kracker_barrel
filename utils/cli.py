@@ -86,6 +86,16 @@ def load_args(config=None):
         default=4,
         help="Maximum password length for brute-force attack (default: 8)."
     )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        help="Number of worker processes (default: auto based on CPU and hash type)."
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        help="Number of candidates per batch (default: auto based on hash type)."
+    )
 
     # Arguments specific to mask-based attack
     parser.add_argument(

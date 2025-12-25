@@ -687,6 +687,10 @@ HashHandler.SHA256Handler = SHA256Handler
 HashHandler.SHA512Handler = SHA512Handler
 
 
+_HANDLER = None
+_STOP = None
+
+
 def get_hash_handler(hash_type, hash_digest_with_metadata):
     hash_handlers = {
         "argon": lambda x: Argon2Handler(x),
@@ -710,23 +714,16 @@ def get_hash_handler(hash_type, hash_digest_with_metadata):
         raise ValueError(f"Error determining hash type or handler: {e}")
 
 
+def init_worker(hash_type, hash_digest_with_metadata, stop_event):
+    global _HANDLER, _STOP
+    _HANDLER = get_hash_handler(hash_type, hash_digest_with_metadata)
+    _STOP = stop_event
+
+
 # Sends a chunk of passwords to be verified instead of one at a time
-def crack_chunk(hash_type, hash_digest_with_metadata, chunk, found_flag):
-    chunk_count = 0
-    results = {}
+def crack_chunk(chunk):
+    if _STOP is not None and _STOP.is_set():
+        return {}, 0
 
-    if found_flag["found"] >= found_flag["goal"]:
-        return results, chunk_count
-    
-    hash_handler = get_hash_handler(hash_type, hash_digest_with_metadata)
-    matched_passwords = hash_handler.verify(chunk)
-    chunk_count += len(chunk)
-
-    if matched_passwords:
-        results.update(matched_passwords)  # Append all hash-password pairs
-        found_flag["matches"].update(matched_passwords)
-
-    if found_flag["found"] >= found_flag["goal"]:
-        return results, chunk_count
-        
-    return results, chunk_count
+    matched_passwords = _HANDLER.verify(chunk)
+    return matched_passwords, len(chunk)

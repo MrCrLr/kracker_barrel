@@ -48,6 +48,25 @@ Kracker Barrel is a high-performance password-recovery tool built for speed, fle
 uv sync && uv run python tests/smoke_test.py
 ```
 
+## **Benchmarking**
+
+Use `bench.py` to compare throughput for different worker and batch sizes.
+
+Single run (default hash type is md5):
+```bash
+uv run python bench.py --hash-type md5 --workers 4 --batch-size 20000 --candidates 50000
+```
+
+Sweep mode to find the best combo:
+```bash
+uv run python bench.py --sweep --hash-type md5 --workers-list 1,2,4,6 --batch-sizes 200,2000,20000 --candidates 50000
+```
+
+Optional CSV export:
+```bash
+uv run python bench.py --sweep --hash-type md5 --workers-list 1,2,4,6 --batch-sizes 200,2000,20000 --candidates 50000 --csv bench.csv
+```
+
 ---
 
 ## **Usage**

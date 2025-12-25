@@ -1,9 +1,9 @@
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from multiprocessing import Manager, Queue
+from multiprocessing import Event, Queue
 import time
 from pathlib import Path
 from tqdm import tqdm
-from core.hash_handler import crack_chunk
+from core.hash_handler import crack_chunk, init_worker
 from core.brut_gen import generate_brute_candidates, yield_brute_batches, get_brute_count
 from core.mask_gen import generate_mask_candidates, yield_maskbased_batches, get_mask_count
 from core.rules_gen import load_rules, apply_rules, yield_rule_batches, get_rule_count
@@ -28,7 +28,6 @@ class Kracker:
         self.max_expansions_per_word = args.max_expansions_per_word
         self.max_candidates = args.max_candidates
         self.workers = max(1, Detector.get_cpu_count() - 1)
-        self.preload_limit = self.workers * 6
         self.batch_size = 2000  # Adjust batch size for performance
         self.rules = []
         self.base_words_processed = 0
@@ -37,11 +36,12 @@ class Kracker:
         # Detect and initialize hash handler
         self.hash_type = Detector.detect(self.hash_digest_with_metadata)
         self.hash_handler = Detector.initialize(self.hash_digest_with_metadata, self.hash_type)
+        self.preload_limit = self._get_preload_limit()
 
-        self.manager = Manager()
         self.start_time = time.perf_counter()
         self.goal = len(self.hash_digest_with_metadata) # Number of hashes in file to crack
-        self.found_flag = self.manager.dict(found=0, goal=self.goal, matches={})  # Global found_flag for stopping on goal match
+        self.found_flag = {"found": 0, "goal": self.goal, "matches": {}}  # Track progress in main process
+        self.stop_event = Event()
 
         if self.operation == "rule":
             rules_path = self._resolve_rules_path(self.rules_file)
@@ -90,6 +90,12 @@ class Kracker:
         if candidate.exists():
             return candidate
         return None
+
+    def _get_preload_limit(self):
+        cheap_hashes = {"md5", "sha256", "sha512", "ntlm"}
+        if self.hash_type in cheap_hashes:
+            return self.workers * 2
+        return self.workers * 4
 
     @staticmethod
     def _wordlist_has_entries(wordlist_path):
@@ -202,65 +208,71 @@ class Workers:
             print(f"{LIGHT_YELLOW}{exc}{RESET}")
             return
 
+        executor = ProcessPoolExecutor(
+            max_workers=self.kracker.workers,
+            initializer=init_worker,
+            initargs=(self.kracker.hash_type, self.kracker.hash_digest_with_metadata, self.kracker.stop_event),
+        )
         try:
-            with ProcessPoolExecutor(max_workers=self.kracker.workers) as executor:
-                print(f"{LIGHT_YELLOW}Starting batch preloading... {RESET}")
-                self.batch_man.preload_batches()
+            print(f"{LIGHT_YELLOW}Starting batch preloading... {RESET}")
+            self.batch_man.preload_batches()
 
-                futures = []  # Queue to hold active Future objects
+            futures = []  # Queue to hold active Future objects
 
-                # Initialize tqdm with total number of batches
-                with tqdm(desc=f"{PURPLE}Batch Processing{RESET}", 
-                          total=self.batch_man.max_batches, 
-                          mininterval=0.1, smoothing=0.1, 
-                          ncols=100, leave=True, ascii=True) as progress_bar:
-                    
+            # Initialize tqdm with total number of batches
+            with tqdm(
+                desc=f"{PURPLE}Batch Processing{RESET}",
+                total=self.batch_man.max_batches,
+                mininterval=0.1,
+                smoothing=0.1,
+                ncols=100,
+                leave=True,
+                ascii=True,
+            ) as progress_bar:
+                # Main processing loop
+                while futures or self.batch_man.rem_batches > 0 or not self.batch_man.batch_queue.empty():
+                    # Submit tasks until the preload limit is reached
+                    while len(futures) < self.kracker.preload_limit and not self.batch_man.batch_queue.empty():
+                        batch = self.batch_man.get_batch()
+                        if batch is None:
+                            break
+                        if self.kracker.stop_event.is_set():
+                            break
+                        future = executor.submit(crack_chunk, batch)
+                        futures.append(future)
 
-                    # Main processing loop
-                    while futures or self.batch_man.rem_batches > 0 or not self.batch_man.batch_queue.empty():
-                        # Submit tasks until the preload limit is reached
-                        while len(futures) < self.kracker.preload_limit and not self.batch_man.batch_queue.empty():
-                            batch = self.batch_man.get_batch()
-                            if batch is None:
-                                break
-                            future = executor.submit(
-                                crack_chunk,
-                                self.kracker.hash_type,
-                                self.kracker.hash_digest_with_metadata,
-                                batch,
-                                self.kracker.found_flag,
-                            )
-                            futures.append(future)
+                    # Process completed futures
+                    for future in as_completed(futures):
+                        try:
+                            self.process_task_result(future)
+                            progress_bar.update(1)  # Update the progress bar
 
-                        # Process completed futures
-                        for future in as_completed(futures):
-                            try:
-                                self.process_task_result(future)
-                                progress_bar.update(1)  # Update the progress bar
-                                
-                                # Stop if all target hashes are matched
-                                if self.kracker.found_flag["found"] == self.kracker.found_flag["goal"]:
-                                    progress_bar.close()
-                                    self.reporter.final_summary()
-                                    return  # Exit immediately
+                            # Stop if all target hashes are matched
+                            if self.kracker.found_flag["found"] == self.kracker.found_flag["goal"]:
+                                self.kracker.stop_event.set()
+                                for pending in futures:
+                                    if not pending.done():
+                                        pending.cancel()
+                                self.reporter.final_summary()
+                                return  # Exit immediately
 
-                            except Exception as e:
-                                print(f"Error processing future: {e}")
-                            finally:
-                                futures.remove(future)
-                        # Dynamically preload more batches if needed
-                        if self.batch_man.rem_batches > 0 and self.batch_man.batch_queue.empty():
-                            self.batch_man.preload_batches()
+                        except Exception as e:
+                            print(f"Error processing future: {e}")
+                        finally:
+                            futures.remove(future)
+                    # Dynamically preload more batches if needed
+                    if self.batch_man.rem_batches > 0 and self.batch_man.batch_queue.empty():
+                        self.batch_man.preload_batches()
 
-                progress_bar.close()
             self.reporter.final_summary()
 
         except KeyboardInterrupt:
+            self.kracker.stop_event.set()
             self.kracker.found_flag["found"] = -1
             print(f"{LIGHT_YELLOW}Process interrupted.{RESET}")
         finally:
+            executor.shutdown(cancel_futures=True)
             print(f"{PURPLE}Program terminated.{RESET}")
-            executor.shutdown
 
     # Process the resluts from completed futures
     def process_task_result(self, task_result):

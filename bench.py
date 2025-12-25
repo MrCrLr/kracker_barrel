@@ -2,8 +2,9 @@ import argparse
 import hashlib
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from multiprocessing import Event
 
-from core.hash_handler import crack_chunk
+from core.hash_handler import crack_chunk, init_worker
 
 
 def build_candidates(total, password):
@@ -26,13 +27,17 @@ def main():
 
     candidates = build_candidates(args.candidates, password)
     batches = [candidates[i:i + args.batch_size] for i in range(0, len(candidates), args.batch_size)]
-    found_flag = {"found": 0, "goal": 1, "matches": {}}
+    stop_event = Event()
 
     start = time.perf_counter()
     total_verified = 0
-    with ProcessPoolExecutor(max_workers=args.workers) as executor:
+    with ProcessPoolExecutor(
+        max_workers=args.workers,
+        initializer=init_worker,
+        initargs=(hash_type, target_hashes, stop_event),
+    ) as executor:
         futures = [
-            executor.submit(crack_chunk, hash_type, target_hashes, batch, found_flag)
+            executor.submit(crack_chunk, batch)
             for batch in batches
         ]
         for future in as_completed(futures):

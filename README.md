@@ -1,21 +1,44 @@
-# Kracker Barrel
+# **Kracker Barrel: Multiprocessing Password Cracker**
 
-A small, **educational password-hash cracking lab tool** for offline verification against common hash formats.  
+Kracker Barrel is a small, **educational password‑hash cracking lab tool** for **offline verification** against common hash formats.  
 Use only on hashes you own or have explicit permission to test.
 
-## Features
+---
 
+## **Table of Contents**
+- [Features](#features)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Usage](#usage)
+  - [Dictionary mode](#dictionary-mode)
+  - [Mask mode](#mask-mode)
+  - [Brute-force mode](#brute-force-mode)
+  - [Rule mode](#rule-mode)
+- [Supported Hash Formats](#supported-hash-formats)
+- [Performance & Concurrency](#performance--concurrency)
+- [Benchmarking](#benchmarking)
+- [Configuration File](#configuration-file)
+- [Development](#development)
+- [License](#license)
+
+---
+
+## **Features**
+- **Auto-detection** of hash type/parameters from metadata-style prefixes.
 - Modes: **dictionary**, **brute-force**, **mask**, **rules**
-- Multiple hash formats (auto-detected from metadata-style prefixes)
-- Single-layer **multiprocessing** with per-worker handler init (fast + predictable)
-- Range-based work units for dict/rule/brut/mask to reduce IPC overhead
+- **Single-layer multiprocessing** with per-worker handler init (fast + predictable).
+- **Low-IPC design**: workers pull **ranges/indices** (avoids pickling huge candidate lists).
+- Wordlist loading options for dict/rule:
+  - `mmap` path for low-copy access
+  - `list` path for comparisons/edge cases
 - Rule-mode guardrails:
   - `--max-expansions-per-word`
   - `--max-candidates`
-- Benchmark harness with sweep + CSV export
-- Wordlist mmap path for dict/rule to reduce per-worker duplication
+- Benchmark harness with **sweep** + optional **CSV** export.
 
-## Setup
+---
+
+## **Installation**
 
 This repo is designed to run with **uv**.
 
@@ -23,46 +46,100 @@ This repo is designed to run with **uv**.
 uv sync
 ```
 
-## Quick start
+---
+
+## **Quick Start**
 
 > Target hash files are plain text: **one hash per line**.
-
-### Dictionary mode
 
 ```bash
 uv run python main.py -d data/hash_md5.txt refs/tiny_wordlist.txt
 ```
 
-### Mask mode
+---
+
+## **Usage**
+
+## **Modes (compact reference)**
+
+| Mode | Flag | Required inputs | Common options | Example |
+|---|---|---|---|---|
+| Dictionary | `-d` | `HASH_FILE` `WORDLIST` | `--workers`, `--batch-size`, `--wordlist-load {mmap,list}` | `uv run python main.py -d data/hash_md5.txt refs/tiny_wordlist.txt` |
+| Brute-force | `-b` | `HASH_FILE` | `--charset`, `--min`, `--max`, `--workers`, `--batch-size` | `uv run python main.py -b data/hash_bcrypt.txt --charset ab1 --min 3 --max 3` |
+| Mask | `-m` | `HASH_FILE` | `--pattern`, `--custom`, `--workers`, `--batch-size` | `uv run python main.py -m data/hash_sha256.txt --pattern "?l?l?d"` |
+| Rules | `-r` | `HASH_FILE` `WORDLIST` | `--rules`, `--max-expansions-per-word`, `--max-candidates`, `--workers`, `--batch-size`, `--wordlist-load {mmap,list}` | `uv run python main.py -r data/hash_md5.txt refs/tiny_wordlist.txt --rules rules.txt --max-expansions-per-word 50 --max-candidates 200000` |
+
+> `HASH_FILE` contains one target hash per line. CLI flags override config values if you use a YAML config.
+
+
+### **Dictionary mode**
+
+```bash
+uv run python main.py -d data/hash_md5.txt refs/tiny_wordlist.txt
+```
+
+### **Mask mode**
 
 ```bash
 uv run python main.py -m data/hash_sha256.txt --pattern "?l?l?d"
 ```
 
-### Brute-force mode
+### **Brute-force mode**
 
 ```bash
 uv run python main.py -b data/hash_bcrypt.txt --charset ab1 --min 3 --max 3
 ```
 
-### Rule mode
+### **Rule mode**
 
 ```bash
 uv run python main.py -r data/hash_md5.txt refs/tiny_wordlist.txt --rules rules.txt \
   --max-expansions-per-word 50 --max-candidates 200000
 ```
 
-## Concurrency tuning
+---
 
-These flags are available across modes:
+## **CLI reference (common flags)**
 
-- `--workers N` — number of worker processes
-- `--batch-size N` — work size per task
+| Flag | Meaning |
+|---|---|
+| `--workers N` | Worker process count (auto defaults by hash “cost”; overrides allowed) |
+| `--batch-size N` | Work size per task (auto defaults by hash “cost”; overrides allowed) |
+| `--wordlist-load {mmap,list}` | Dict/rule wordlist loading strategy (bench/debug/compat) |
+| `--max-expansions-per-word N` | Rule-mode per-base-word expansion cap |
+| `--max-candidates N` | Rule-mode global candidate cap |
 
-Defaults are chosen automatically based on hash "cost" (cheap vs expensive) and printed in the startup banner.  
-For your machine's best values, use the benchmark sweep.
+---
 
-## Benchmarking
+## **Supported Hash Formats**
+
+> Hashes are expected in metadata-style formats (prefix-based) where applicable.
+
+| Algorithm | Notes / parameters auto-parsed |
+|---|---|
+| Argon2id | time cost, memory cost, parallelism |
+| bcrypt | cost factor |
+| scrypt | N / r / p |
+| PBKDF2 | hash alg, iterations, salt |
+| NTLM | UTF-16LE handling |
+| MD5 | raw digest verification |
+| SHA-256 | raw digest verification |
+| SHA-512 | raw digest verification |
+
+---
+
+## **Performance & Concurrency**
+
+Kracker Barrel uses a single `ProcessPoolExecutor` with:
+- **Per-worker initialization** (hash handler and mode config built once).
+- **Range/index-based work units** (minimizes IPC/pickling overhead).
+- **Stop-event fast cancellation** for responsive early exits.
+
+Defaults are printed in the startup banner and can be overridden via `--workers` and `--batch-size`.
+
+---
+
+## **Benchmarking**
 
 Single run:
 
@@ -70,7 +147,7 @@ Single run:
 uv run python bench.py --mode dict --hash-type md5 --workers 4 --batch-size 20000 --candidates 5000000
 ```
 
-Sweep (find best config):
+Sweep (find best workers/batch-size combo):
 
 ```bash
 uv run python bench.py --sweep \
@@ -80,26 +157,51 @@ uv run python bench.py --sweep \
   --candidates 5000000 --csv bench.csv
 ```
 
-Dictionary/rule wordlist loading:
-- `--wordlist-load mmap` (default) uses memory-mapped wordlists for lower duplication.
-- `--wordlist-load list` loads full lists into each worker for comparison.
+### Wordlist loading comparisons
+
+| Option | When to use |
+|---|---|
+| `--wordlist-load mmap` | Default-ish path for low-copy access; better scalability on large wordlists |
+| `--wordlist-load list` | Baseline comparisons; simplest behavior |
 
 ### RSS vs mmap note (macOS)
 
 On macOS, `ru_maxrss` can look **higher** with `mmap` because file-backed mapped pages are counted in RSS.  
-That does **not** necessarily mean higher private memory usage. For a true private-memory view, prefer USS (bench reports it
-via `psutil`) or tools like `vmmap`.
+That does **not** necessarily mean higher *private* memory usage. For private-memory views, prefer tools like `vmmap`
+or USS metrics when available.
 
-## Config file
+---
+
+## **Configuration File**
 
 There is a YAML config loader for convenience. It is typically used when you run with **no CLI args**;  
 CLI arguments override config.
 
-See: `config.yaml` for examples.
+**Example keys (high level):**
 
-## Development
+| Key | Meaning |
+|---|---|
+| `operation` | `dict` \| `brut` \| `mask` \| `rule` |
+| `target_file` | Path to hashes file |
+| `password_list` | Wordlist path (dict/rule) |
+| `pattern` | Mask pattern (mask mode) |
+| `charset`, `min`, `max` | Brut parameters |
+| `rules` | Rules file (rule mode) |
+| `workers`, `batch-size` | Concurrency overrides (optional) |
 
-Run tests:
+See `config.example.yaml` for a full template.
+
+---
+
+## **Development**
+
+Quick check:
+
+```bash
+uv sync && uv run python tests/smoke_test.py
+```
+
+Tests:
 
 ```bash
 uv run python tests/smoke_test.py
@@ -115,3 +217,9 @@ Compile check:
 ```bash
 uv run python -m compileall -q core utils main.py tests bench.py
 ```
+
+---
+
+## **License**
+
+MIT. See [LICENSE](LICENSE).

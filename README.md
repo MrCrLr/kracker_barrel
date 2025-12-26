@@ -1,203 +1,117 @@
+# Kracker Barrel
 
-# **Kracker Barrel: Multiprocessing Password Cracker**
+A small, **educational password-hash cracking lab tool** for offline verification against common hash formats.  
+Use only on hashes you own or have explicit permission to test.
 
-Kracker Barrel is a high-performance password-recovery tool built for speed, flexibility, and ease of use. It leverages multiprocessing, automatic parameter detection, and robust logging to handle various cryptographic hash types efficiently. Whether you’re a security researcher or conducting password recovery, **Kracker Barrel** gets the job done.
+## Features
 
----
+- Modes: **dictionary**, **brute-force**, **mask**, **rules**
+- Multiple hash formats (auto-detected from metadata-style prefixes)
+- Single-layer **multiprocessing** with per-worker handler init (fast + predictable)
+- Range-based work units for dict/rule/brut/mask to reduce IPC overhead
+- Rule-mode guardrails:
+  - `--max-expansions-per-word`
+  - `--max-candidates`
+- Benchmark harness with sweep + CSV export
+- Wordlist mmap path for dict/rule to reduce per-worker duplication
 
-## **Table of Contents**
-- [Features](#features)
-- [Installation](#installation)
-- [Usage](#usage)
-- [Supported Hash Algorithms](#supported-hash-algorithms)
-- [Advanced Options](#advanced-options)
-- [Configuration File](#configuration-file)
-- [Hash Maker Tool](#hash-maker-tool)
-- [License](#license)
+## Setup
 
----
-
-## **Features**
-- **Auto-Detection**: Automatically identifies the parameters from input hashes.
-- **Parallel Processing**: Uses Python’s `ProcessPoolExecutor` for concurrent, scalable CPU processing.
-- **Dynamic Wordlist Handling**: Processes large wordlists in manageable batches for optimal memory usage by using a generator to yield and queue batches of potential password matches.
-- **Robust Logging**: Tracks everything, from attempted passwords to batch processing times.
-- **Configurable Batch Size**: Tailor batch sizes to fit system resources.
-- **Wide Hash Support**: Handles Argon2, bcrypt, scrypt, PBKDF2, NTLM, MD5, SHA-256, and SHA-512.
-- **Dictionary, Brute-Force and Mask-Based Operational Modes**: Generate new passwords efficiently and check your forgotten passwords against a multitude of combinaitons. More attack modes (Rules-based and hybrid-modes) coming soon. 
----
-
-## **Installation**
-
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/yourusername/kracker_barrel.git
-   cd kracker_barrel
-   ```
-
-2. Install dependencies:
-   ```bash
-   python3 -m venv venv
-   source venv/bin/activate
-   pip install -r requirements.txt
-   ```
-
-## **Development Quick Check**
+This repo is designed to run with **uv**.
 
 ```bash
-uv sync && uv run python tests/smoke_test.py
+uv sync
 ```
 
-## **Benchmarking**
+## Quick start
 
-Use `bench.py` to compare throughput for different worker and batch sizes.
+> Target hash files are plain text: **one hash per line**.
 
-Single run (default hash type is md5):
+### Dictionary mode
+
 ```bash
-uv run python bench.py --hash-type md5 --workers 4 --batch-size 20000 --candidates 50000
+uv run python main.py -d data/hash_md5.txt refs/tiny_wordlist.txt
 ```
 
-Sweep mode to find the best combo:
+### Mask mode
+
 ```bash
-uv run python bench.py --sweep --hash-type md5 --workers-list 1,2,4,6 --batch-sizes 200,2000,20000 --candidates 50000
+uv run python main.py -m data/hash_sha256.txt --pattern "?l?l?d"
 ```
 
-Optional CSV export:
+### Brute-force mode
+
 ```bash
-uv run python bench.py --sweep --hash-type md5 --workers-list 1,2,4,6 --batch-sizes 200,2000,20000 --candidates 50000 --csv bench.csv
+uv run python main.py -b data/hash_bcrypt.txt --charset ab1 --min 3 --max 3
 ```
 
-Memory note (macOS):
-- `bench.py --report-rss` reports RSS and USS when `psutil` is installed. RSS includes file-backed mapped pages, so mmap can look larger than list loading; use USS for private memory comparisons.
-- Bench supports `--mode dict|rule|brut|mask` plus `--wordlist-load mmap|list` for dict/rule wordlists.
+### Rule mode
 
----
-
-## **Usage**
-
-To start cracking passwords, provide a file containing hashed passwords and specify the type of operation (`dict`, `mask`, `brut`).
-
-### **Basic Command**
 ```bash
-python main.py -d <hash_type> target_hashes.txt rockyou.txt
+uv run python main.py -r data/hash_md5.txt refs/tiny_wordlist.txt --rules rules.txt \
+  --max-expansions-per-word 50 --max-candidates 200000
 ```
 
-### **Arguments**
-| Flag                | Description                                                                   |
-|---------------------|-------------------------------------------------------------------------------|
-| Dictionary Mode     |                                                                               |
-| `-d` or `--dict`    | Path to the wordlist for dictionary attacks.                                  |
-| `<hash_type>`       | E.g., `argon`, `bcrypt`, `pbkdf2`, `scrypt`, `ntlm`, `md5`, `sha256`, `sha512`|
-| `target_hashes.txt` | Path to the file containing target hashes.                                    |
-| `wordlist.txt`      | Path to the file containing the wordlist.                                     |
-| Mask-Based Mode     |                                                                               |
-| `-m` or `--mask`    | Operation type (`dict`, `mask`, or `brut`).                                   |
-| `<hash_type>`       | E.g., `argon`, `bcrypt`, `pbkdf2`, `scrypt`, `ntlm`, `md5`, `sha256`, `sha512`|
-| `target_hashes.txt` | Path to the file containing target hashes.                                    |
-| `--pattern <?l?l?d>`| Mask pattern for mask-based attacks (e.g., `?l?l?d?d`).                       |
-| Brute-Force Mode    |                                                                               |
-| `-b` or `--brut`    | Operation type (`dict`, `mask`, or `brut`).                                   |
-| `<hash_type>`       | E.g., `argon`, `bcrypt`, `pbkdf2`, `scrypt`, `ntlm`, `md5`, `sha256`, `sha512`|
-| `target_hashes.txt` | Path to the file containing target hashes.                                    |
-| `--charset <abc123>`| Character set for brute force (e.g., `AaBbCc123#?*`).                         |
-| `--min <int>`       | Minimum length for brute-force candidates (e.g., `1`).                        |
-| `--max <int>`       | Maximum length for brute-force candidates (e.g., `5`).                        |
-| Global Options      |                                                                               |
-| `--workers <int>`   | Worker processes (default: auto by hash type; cheap<=6, expensive<=4).        |
-| `--batch-size <int>`| Candidates per batch (default: cheap=20000, expensive=1000).                  |
+## Concurrency tuning
 
----
+These flags are available across modes:
 
-## **Supported Hash Algorithms**
+- `--workers N` — number of worker processes
+- `--batch-size N` — work size per task
 
-| Algorithm | Description                                      | Parameters Logged                          |
-|-----------|-----------------------------------------------   |--------------------------------------------|
-| **Argon2**| Memory-hard algorithm with configurable costs    | Time cost, memory cost, parallelism        |
-| **Bcrypt**| Adjustable work factor, secure password hashing  | Rounds                                     |
-| **Scrypt**| Memory-hard key derivation function              | Length, memory cost (n), block size (r), parallelism (p)|
-| **PBKDF2**| Iterative key derivation function                | Algorithm, iterations, salt length         |
-| **NTLM**  | Windows password hashing                         | Encoding (UTF-16LE), hash length           |
-| **MD5**   | Basic hash (insecure for passwords)              | Encoding (UTF-8), hash length              |
-| **SHA-256**| Cryptographic hash function                     | Encoding (UTF-8), hash length              |
-| **SHA-512**| Cryptographic hash function                     | Encoding (UTF-8), hash length              |
+Defaults are chosen automatically based on hash "cost" (cheap vs expensive) and printed in the startup banner.  
+For your machine's best values, use the benchmark sweep.
 
----
+## Benchmarking
 
-## **Advanced Options**
+Single run:
 
-### **Batch Size and Concurrency**
-You can fine-tune the performance by adjusting:
-- **Batch Size**: Controls the number of passwords processed per batch (`batch_size` in the code). Preloaded batches are stored in a queue. The generator yields batches to queeu a number of batches equal to number of CPU cores * 3 as a default. This eliminates processes ever needing to wait for work.
-- **Concurrency**: Maximize CPU utilization by increasing the number of workers (`workers` variable in `kracker.py`). Default setting automatically detects machine's cores and sets workers equal.
-
-### **Dynamic Hash Parameter Parsing**
-Hash parameters such as time cost, memory cost, or rounds are auto-parsed directly from the hash input. Manual configuration is no longer necessary.
-
-## **Configuration file**
-
-Cracker Barrel now supports using a configuration file (`config.yaml`) to define the cracking mode and its parameters. This allows users to save multiple configurations and easily switch between setups. The command-line arguments parser defaults to the configuration file unless overriding arguments are provided at runtime.
-
-### Advantages
-
-- Simplifies workflow for commonly used setups.
-- Allows for easy planning and recovery strategies.
-- Facilitates the storage of multiple cracking configurations.
-
----
-Config.yaml|||
---|--|--|
-|||
-DICTIONARY RECOVERY |||
-**operation**: | `dict`
-**hash_type**: | `argon`  |# Supported: argon, bcrypt, scrypt, pbkdf2, ntlm, md5, sha256, sha512
-**target_file**: | `hashed_passwords.txt`  |# File containing hashed passwords (place in "data/")
-**password_list**: | `rockyou.txt`      |# File with potential passwords (place in "refs/")
-|||
-BRUTE FORCE RECOVERY |||
-**operation**: | `brut`
-**hash_type**: | `sha256`  |# Supported: argon, bcrypt, scrypt, pbkdf2, ntlm, md5, sha256, sha512
-**target_file**: | `hashed_passwords.txt`  |# File containing hashed passwords (place in "data/")
-**charset**: | `abcdef12345`                 |# Charset for brute force (default: alphanumeric)
-**min**: | `1`                               |# Minimum password length
-m**ax**: | `4`                               |# Maximum password length
-|||
-MASK-BASED RECOVERY |||
-**operation**: | `mask`
-**hash_type**: | `bcrypt`  |# Supported: argon, bcrypt, scrypt, pbkdf2, ntlm, md5, sha256, sha512
-**target_file**: | `hashed_passwords.txt`  |# File containing hashed passwords (place in "data/")
-**pattern**: | `"?u?l?d"`                    |# Mask pattern (e.g., ?u = uppercase, ?l = lowercase, ?d = digit)
-
----
-
-## **Hash Maker Tool**
-
-The **Hash Maker** companion script helps generate test hashes for validating Kracker Barrel’s functionality.
-
-### **Usage**
-Generate hashes using `hashmaker.py`:
 ```bash
-python hashmaker.py -o pbkdf2 <output_file>
+uv run python bench.py --mode dict --hash-type md5 --workers 4 --batch-size 20000 --candidates 5000000
 ```
 
-#### **Available Algorithms**:
-| Algorithm | Example Command                                                                |
-|-----------|--------------------------------------------------------------------------------|
-| Argon2, test mode, with output file  | `python hashmaker.py -o argon -t output_file.txt`   |
-| Bcrypt, outputted to terminal only   | `python hashmaker.py -o bcrypt`                     |
-| Usage: | `-o {argon,bcrypt,scrypt,pbkdf2,md5,ntlm,sha256,sha512} [-t] [output_file]`       |
+Sweep (find best config):
 
+```bash
+uv run python bench.py --sweep \
+  --mode dict --hash-type md5 \
+  --workers-list 1,2,4,6,8 \
+  --batch-sizes 2000,20000,100000 \
+  --candidates 5000000 --csv bench.csv
+```
 
----
-## **Metadata file generator**
-`<output_file.txt>` is optional. If provided hashes are saved with an additional metadata file documenting the parameters and the plaintext password. If no output file, hashes are outputted to terminal only.
+Dictionary/rule wordlist loading:
+- `--wordlist-load mmap` (default) uses memory-mapped wordlists for lower duplication.
+- `--wordlist-load list` loads full lists into each worker for comparison.
 
----
+### RSS vs mmap note (macOS)
 
-## **Test Mode**
-Enable the `--test_mode` or `-t` flag to create test hashes with reduced computational difficulty for faster cracking. These hashes do not meet industry security standards but are ideal for validation.
+On macOS, `ru_maxrss` can look **higher** with `mmap` because file-backed mapped pages are counted in RSS.  
+That does **not** necessarily mean higher private memory usage. For a true private-memory view, prefer USS (bench reports it
+via `psutil`) or tools like `vmmap`.
 
----
+## Config file
 
-## **License**
+There is a YAML config loader for convenience. It is typically used when you run with **no CLI args**;  
+CLI arguments override config.
 
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+See: `config.yaml` for examples.
+
+## Development
+
+Run tests:
+
+```bash
+uv run python tests/smoke_test.py
+uv run python tests/test_vectors.py
+uv run python tests/test_inputs.py
+uv run python tests/test_rules.py
+uv run python tests/test_index_mapping.py
+uv run python tests/test_mmap_wordlist.py
+```
+
+Compile check:
+
+```bash
+uv run python -m compileall -q core utils main.py tests bench.py
+```

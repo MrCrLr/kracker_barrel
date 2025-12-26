@@ -96,6 +96,8 @@ def run_bench(
     brut_settings,
     mask_pattern,
     custom_strings,
+    report_rss,
+    wordlist_load_mode,
 ):
     password = "benchpass"
     target_hashes = build_target_hash(hash_type, password)
@@ -127,18 +129,29 @@ def run_bench(
             brut_settings,
             mask_pattern,
             custom_strings,
+            1024,
+            report_rss,
+            wordlist_load_mode,
         ),
     ) as executor:
         futures = [executor.submit(crack_range, work_range) for work_range in ranges]
+        rss_values = []
+        uss_values = []
         for future in as_completed(futures):
             _, meta = future.result()
             total_verified += meta.get("verified_count", 0)
+            if report_rss and meta.get("rss_kb") is not None:
+                rss_values.append(meta["rss_kb"])
+            if report_rss and meta.get("uss_kb") is not None:
+                uss_values.append(meta["uss_kb"])
     elapsed = time.perf_counter() - start
     batches_processed = len(ranges)
     avg_batch_time = elapsed / batches_processed if batches_processed else 0
     rate = total_verified / elapsed if elapsed else 0
     overhead_estimate = 0.0
 
+    rss_kb = max(rss_values) if rss_values else None
+    uss_kb = max(uss_values) if uss_values else None
     return {
         "workers": workers,
         "batch_size": batch_size,
@@ -147,6 +160,8 @@ def run_bench(
         "rate": rate,
         "avg_batch_time": avg_batch_time,
         "overhead_estimate": overhead_estimate,
+        "rss_kb": rss_kb,
+        "uss_kb": uss_kb,
     }
 
 
@@ -166,6 +181,8 @@ def main():
     parser.add_argument("--workers-list", type=str, default=None)
     parser.add_argument("--batch-sizes", type=str, default=None)
     parser.add_argument("--csv", type=str, default=None)
+    parser.add_argument("--report-rss", action="store_true", default=False)
+    parser.add_argument("--wordlist-load", type=str, choices=["mmap", "list"], default="mmap")
     args = parser.parse_args()
 
     hash_type = args.hash_type
@@ -202,13 +219,24 @@ def main():
                         brut_settings,
                         args.pattern,
                         args.custom,
+                        args.report_rss,
+                        args.wordlist_load,
                     )
                     results.append(result)
                     if best is None or result["rate"] > best["rate"]:
                         best = result
+                    rss_suffix = ""
+                    if args.report_rss:
+                        parts = []
+                        if result.get("rss_kb") is not None:
+                            parts.append(f"rss_kb={result['rss_kb']}")
+                        if result.get("uss_kb") is not None:
+                            parts.append(f"uss_kb={result['uss_kb']}")
+                        if parts:
+                            rss_suffix = " " + " ".join(parts)
                     print(
                         f"workers={w} batch={b} candidates/sec={result['rate']:.1f} "
-                        f"elapsed={result['elapsed']:.2f}s avg_batch={result['avg_batch_time']:.4f}s"
+                        f"elapsed={result['elapsed']:.2f}s avg_batch={result['avg_batch_time']:.4f}s{rss_suffix}"
                     )
 
             if args.csv:
@@ -222,13 +250,15 @@ def main():
                             "batch_size",
                             "candidates",
                             "elapsed",
-                            "rate",
-                            "avg_batch_time",
-                            "overhead_estimate",
-                        ],
-                    )
-                    writer.writeheader()
-                    writer.writerows(results)
+                        "rate",
+                        "avg_batch_time",
+                        "overhead_estimate",
+                        "rss_kb",
+                        "uss_kb",
+                    ],
+                )
+                writer.writeheader()
+                writer.writerows(results)
 
             if best:
                 print(
@@ -248,10 +278,17 @@ def main():
             brut_settings,
             args.pattern,
             args.custom,
+            args.report_rss,
+            args.wordlist_load,
         )
         print(f"Candidates verified: {result['candidates']}")
         print(f"Elapsed: {result['elapsed']:.2f}s")
         print(f"Candidates/sec: {result['rate']:.1f}")
+        if args.report_rss:
+            if result.get("rss_kb") is not None:
+                print(f"Max RSS (KB): {result['rss_kb']}")
+            if result.get("uss_kb") is not None:
+                print(f"Max USS (KB): {result['uss_kb']}")
     finally:
         if wordlist_path:
             wordlist_path.unlink(missing_ok=True)

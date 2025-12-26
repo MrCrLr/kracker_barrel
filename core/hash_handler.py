@@ -689,6 +689,8 @@ HashHandler.SHA512Handler = SHA512Handler
 
 _HANDLER = None
 _STOP = None
+_MMAP = None
+_OFFSETS = None
 _WORDLIST_BYTES = None
 _RULES = None
 _MODE = None
@@ -698,6 +700,8 @@ _CHARSET_BYTES = None
 _LENGTH_TABLE = None
 _MASK_ALPHABETS = None
 _MICRO_BATCH = 1024
+_REPORT_RSS = False
+_WORDLIST_LOAD_MODE = "mmap"
 
 
 def get_hash_handler(hash_type, hash_digest_with_metadata):
@@ -742,28 +746,40 @@ def init_worker_range(
     mask_pattern=None,
     custom_strings=None,
     micro_batch=1024,
+    report_rss=False,
+    wordlist_load_mode="mmap",
 ):
     global _HANDLER, _STOP, _WORDLIST_BYTES, _RULES, _MODE, _MAX_EXPANSIONS_PER_WORD, _MAX_CANDIDATES
-    global _CHARSET_BYTES, _LENGTH_TABLE, _MASK_ALPHABETS, _MICRO_BATCH
+    global _CHARSET_BYTES, _LENGTH_TABLE, _MASK_ALPHABETS, _MICRO_BATCH, _REPORT_RSS, _WORDLIST_LOAD_MODE
+    global _MMAP, _OFFSETS
     _HANDLER = get_hash_handler(hash_type, hash_digest_with_metadata)
     _STOP = stop_event
     _MODE = mode
     _MAX_EXPANSIONS_PER_WORD = max_expansions_per_word
     _MAX_CANDIDATES = max_candidates
     _MICRO_BATCH = micro_batch
+    _REPORT_RSS = report_rss
+    _WORDLIST_LOAD_MODE = wordlist_load_mode
 
+    _MMAP = None
+    _OFFSETS = None
     _WORDLIST_BYTES = None
     if wordlist_path:
-        with open(wordlist_path, "r", encoding="latin-1", errors="replace") as file:
-            wordlist = []
-            for line in file:
-                cleaned = line.strip()
-                if not cleaned:
-                    continue
-                if "�" in cleaned:
-                    continue
-                wordlist.append(cleaned.encode("utf-8"))
-            _WORDLIST_BYTES = wordlist
+        if wordlist_load_mode == "list":
+            with open(wordlist_path, "r", encoding="latin-1", errors="replace") as file:
+                wordlist = []
+                for line in file:
+                    cleaned = line.strip()
+                    if not cleaned:
+                        continue
+                    if "�" in cleaned:
+                        continue
+                    wordlist.append(cleaned.encode("utf-8"))
+                _WORDLIST_BYTES = wordlist
+        else:
+            from utils.file_io import mmap_wordlist
+
+            _MMAP, _OFFSETS = mmap_wordlist(wordlist_path)
 
     _RULES = None
     if mode == "rule":
@@ -798,15 +814,64 @@ def crack_range(range_tuple):
         return {}, {"base_words_processed": 0, "expanded_generated": 0, "verified_count": 0}
 
     start_idx, end_idx = range_tuple
+    def _get_word_bytes(idx):
+        if _WORDLIST_BYTES is not None:
+            return _WORDLIST_BYTES[idx]
+        start, end = _OFFSETS[idx]
+        return _MMAP[start:end]
+
+    def _maybe_rss(meta):
+        if not _REPORT_RSS:
+            return meta
+        try:
+            import resource
+            import sys
+
+            rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+            # Linux reports KB, macOS reports bytes.
+            if sys.platform == "darwin":
+                rss = rss // 1024
+            meta["rss_kb"] = rss
+        except Exception:
+            meta["rss_kb"] = None
+        try:
+            import psutil
+
+            proc = psutil.Process()
+            full_info = proc.memory_full_info()
+            uss = getattr(full_info, "uss", None)
+            if uss is not None:
+                meta["uss_kb"] = uss // 1024
+            else:
+                meta["uss_kb"] = None
+        except Exception:
+            meta["uss_kb"] = None
+        return meta
+
     if _MODE == "dict":
-        candidates = _WORDLIST_BYTES[start_idx:end_idx]
-        matches = _HANDLER.verify(candidates) if candidates else {}
-        count = len(candidates)
-        return matches, {
-            "base_words_processed": count,
-            "expanded_generated": count,
-            "verified_count": count,
-        }
+        matches = {}
+        verified_count = 0
+        candidates = []
+        for idx in range(start_idx, end_idx):
+            if _STOP is not None and _STOP.is_set():
+                break
+            candidates.append(_get_word_bytes(idx))
+            if len(candidates) >= _MICRO_BATCH:
+                batch_matches = _HANDLER.verify(candidates)
+                if batch_matches:
+                    matches.update(batch_matches)
+                verified_count += len(candidates)
+                candidates = []
+        if candidates:
+            batch_matches = _HANDLER.verify(candidates)
+            if batch_matches:
+                matches.update(batch_matches)
+            verified_count += len(candidates)
+        return matches, _maybe_rss({
+            "base_words_processed": verified_count,
+            "expanded_generated": verified_count,
+            "verified_count": verified_count,
+        })
 
     if _MODE == "rule":
         if not _RULES:
@@ -831,9 +896,10 @@ def crack_range(range_tuple):
         expanded_generated = 0
         candidates = []
 
-        for word_bytes in _WORDLIST_BYTES[start_idx:end_idx]:
+        for idx in range(start_idx, end_idx):
             if _STOP is not None and _STOP.is_set():
                 break
+            word_bytes = _get_word_bytes(idx)
             word = word_bytes.decode("utf-8", errors="replace")
             base_words_processed += 1
             per_word_count = 0
@@ -849,11 +915,11 @@ def crack_range(range_tuple):
                 break
 
         matches = _HANDLER.verify(candidates) if candidates else {}
-        return matches, {
+        return matches, _maybe_rss({
             "base_words_processed": base_words_processed,
             "expanded_generated": expanded_generated,
             "verified_count": len(candidates),
-        }
+        })
 
     if _MODE == "brut":
         from core.brut_gen import index_to_brut_candidate
@@ -876,11 +942,11 @@ def crack_range(range_tuple):
             if batch_matches:
                 matches.update(batch_matches)
             verified_count += len(candidates)
-        return matches, {
+        return matches, _maybe_rss({
             "base_words_processed": 0,
             "expanded_generated": 0,
             "verified_count": verified_count,
-        }
+        })
 
     if _MODE == "mask":
         from core.mask_gen import index_to_mask_candidate
@@ -903,10 +969,10 @@ def crack_range(range_tuple):
             if batch_matches:
                 matches.update(batch_matches)
             verified_count += len(candidates)
-        return matches, {
+        return matches, _maybe_rss({
             "base_words_processed": 0,
             "expanded_generated": 0,
             "verified_count": verified_count,
-        }
+        })
 
-    return {}, {"base_words_processed": 0, "expanded_generated": 0, "verified_count": 0}
+    return {}, _maybe_rss({"base_words_processed": 0, "expanded_generated": 0, "verified_count": 0})

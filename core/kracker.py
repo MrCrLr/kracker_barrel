@@ -245,6 +245,9 @@ class Workers:
                     self.kracker.brute_settings,
                     self.kracker.mask_pattern,
                     self.kracker.custom_strings,
+                    1024,
+                    False,
+                    "mmap",
                 ),
             )
             task_fn = crack_range

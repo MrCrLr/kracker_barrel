@@ -1,5 +1,6 @@
 from itertools import islice
 import logging
+import mmap
 from pathlib import Path
 import sys
 
@@ -65,3 +66,37 @@ def get_number_of_passwords(path_to_passwords):
 def count_wordlist_entries(path_to_passwords):
     with path_to_passwords.open("r", encoding="latin-1", errors="replace") as file:
         return sum(1 for line in file if line.strip())
+
+
+def mmap_wordlist(path_to_passwords):
+    """
+    Memory-map a wordlist and return (mmap_obj, offsets) for non-empty lines.
+    Offsets are (start, end) byte positions with trailing CR/LF stripped.
+    """
+    with Path(path_to_passwords).open("rb") as file:
+        if file.seek(0, 2) == 0:
+            return mmap.mmap(-1, 0), []
+        file.seek(0)
+        mm = mmap.mmap(file.fileno(), 0, access=mmap.ACCESS_READ)
+
+    offsets = []
+    size = mm.size()
+    start = 0
+    while start < size:
+        newline = mm.find(b"\n", start)
+        if newline == -1:
+            line_end = size
+            next_start = size
+        else:
+            line_end = newline
+            next_start = newline + 1
+
+        if line_end > start and mm[line_end - 1:line_end] == b"\r":
+            line_end -= 1
+
+        if line_end > start:
+            offsets.append((start, line_end))
+
+        start = next_start
+
+    return mm, offsets

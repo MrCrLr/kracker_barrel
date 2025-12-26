@@ -2,6 +2,7 @@ import argparse
 import base64
 import time
 import os
+import sys
 from pathlib import Path
 from argon2 import PasswordHasher
 import bcrypt
@@ -16,13 +17,28 @@ DATA_DIR = Path(__file__).parent.parent / "data"
 
 
 class HashMaker():
-    def __init__(self, operation, passwords, output_file, test_mode, secure_mode):
+    def __init__(
+        self,
+        operation,
+        passwords,
+        output_file=None,
+        test_mode=False,
+        secure_mode=False,
+        output_format="kracker",
+        include_plaintext_metadata=False,
+        deterministic=False,
+        seed=None,
+    ):
         self.operation = operation
         self.passwords = passwords
-        self.output_file = Path(output_file)
+        self.output_file = Path(output_file) if output_file else None
         self.file_path = None
         self.test_mode = test_mode
         self.secure_mode = secure_mode
+        self.output_format = output_format
+        self.include_plaintext_metadata = include_plaintext_metadata
+        self.deterministic = deterministic
+        self.seed = seed if seed is not None else "kracker-barrel"
         self.parameters = self.set_parameters()
 
     def set_parameters(self):
@@ -48,6 +64,46 @@ class HashMaker():
                 "pbkdf2": {"algorithm": hashes.SHA512(), "algo_text": "sha512", "iterations": 210000, "salt_length": 16, "hash_length": 32}
             }
         
+    def _derive_salt(self, password, salt_length, index):
+        if not self.deterministic:
+            return os.urandom(salt_length)
+
+        seed_bytes = self.seed.encode("utf-8")
+        password_bytes = password.encode("utf-8")
+        counter = 0
+        digest = b""
+        while len(digest) < salt_length:
+            hasher = hashlib.sha256()
+            hasher.update(seed_bytes)
+            hasher.update(b":")
+            hasher.update(password_bytes)
+            hasher.update(b":")
+            hasher.update(str(index).encode("utf-8"))
+            hasher.update(b":")
+            hasher.update(str(counter).encode("utf-8"))
+            digest += hasher.digest()
+            counter += 1
+        return digest[:salt_length]
+
+    def format_hashes(self, hashed, operation):
+        if self.output_format == "kracker":
+            return hashed
+        if self.output_format != "raw":
+            raise ValueError(f"Unsupported output format: {self.output_format}")
+
+        raw_hashes = []
+        for item in hashed:
+            if operation in {"md5", "ntlm", "sha256", "sha512"}:
+                parts = item.split("$", 2)
+                raw_hashes.append(parts[2] if len(parts) == 3 else item)
+                continue
+            if operation in {"pbkdf2", "scrypt"}:
+                parts = item.split("$", 2)
+                raw_hashes.append(parts[2] if len(parts) == 3 else item)
+                continue
+            raw_hashes.append(item)
+        return raw_hashes
+
     def compute_argon(self, time_cost, memory_cost, parallelism):
         """
         Compute Argon2 hashes using explicit keyword arguments.
@@ -79,9 +135,9 @@ class HashMaker():
 
     def compute_scrypt(self, salt_length, hash_length, n, r, p):
         hash_list = []
-        for password in self.passwords:
+        for index, password in enumerate(self.passwords):
             # Set up the Scrypt KDF
-            salt = os.urandom(salt_length)
+            salt = self._derive_salt(password, salt_length, index)
             kdf = Scrypt(
                 salt=salt, 
                 length=hash_length, 
@@ -105,8 +161,8 @@ class HashMaker():
     def compute_pbkdf2(self, algorithm, algo_text, iterations, salt_length, hash_length):
         hash_list = []
         
-        for password in self.passwords:
-            salt = os.urandom(salt_length)
+        for index, password in enumerate(self.passwords):
+            salt = self._derive_salt(password, salt_length, index)
             kdf = PBKDF2HMAC(
                 algorithm=algorithm,
                 length=hash_length, 
@@ -169,6 +225,8 @@ class HashMaker():
 
     def _save_to_file(self, hashed, operation):
         try:
+            if self.output_file is None:
+                return None
             try:
                 # Ensure the "data" directory exists
                 data_dir = DATA_DIR
@@ -177,32 +235,36 @@ class HashMaker():
                 print(f"Error creating data directory: {e}")
                 exit(1)
 
-            # Get unique filenames for hashes and metadata
+            # Get unique filename for hashes
             hashed_password_filename = self._unique_filename()
-            metadata_filename = hashed_password_filename.with_name(
-                hashed_password_filename.stem + "_metadata" + hashed_password_filename.suffix
-            )
 
             # Write the hashed data to the hash file
             with hashed_password_filename.open("w") as file:
                 for item in hashed:
                     file.write(f"{item}\n")
+            if self.include_plaintext_metadata:
+                metadata_filename = hashed_password_filename.with_name(
+                    hashed_password_filename.stem + "_metadata" + hashed_password_filename.suffix
+                )
+                params = self.parameters.get(operation, {})
+                with metadata_filename.open("w") as meta_file:
+                    for password, hash_value in zip(self.passwords, hashed):
+                        meta_file.write(f"Password: {password}\n")
+                        meta_file.write(f"Hash: {hash_value}\n")
+                        meta_file.write(f"Hashed using: {operation}\n")
+                        meta_file.write(f"Parameters: {params}\n\n")
+                print(f"Metadata saved to: {metadata_filename}")
 
-            # Write metadata to the metadata file
-            with metadata_filename.open("w") as meta_file:
-                for password, hash in zip(self.passwords, hashed):
-                    meta_file.write(f"Password: {password}\n")
-                    meta_file.write(f"Hash: {hash}\n")
-                    meta_file.write(f"Hashed using: {operation}\n")
-                    meta_file.write(f"Parameters: {self.parameters[operation]}\n\n")
-                    
             print(f"List saved to: {hashed_password_filename}")
-            print(f"Metadata saved to: {metadata_filename}")
+            return hashed_password_filename
         except OSError as e:
             print(f"Error saving files: {e}")
+            return None
 
 
     def _unique_filename(self):
+        if self.output_file is None:
+            return None
         # Ensure the filename is inside the "data" directory
         self.file_path = DATA_DIR / self.output_file
         while self.file_path.exists():
@@ -213,43 +275,128 @@ class HashMaker():
     
 
 # Parsing command line arguments
-def get_command_line_args():
+def get_command_line_args(argv=None):
     parser = argparse.ArgumentParser(description="Password Hashing Utility")
-    
-    # Create a mutually exclusive group for the hash algorithm options
+
     parser.add_argument(
-        "-o", "--operation", 
+        "-o", "--operation",
         choices=["argon", "bcrypt", "scrypt", "pbkdf2", "md5", "ntlm", "sha256", "sha512"],
-        help="Choose a hash algorithm to use", 
-        required=True
+        help="Choose a hash algorithm to use",
+        required=True,
     )
-    parser.add_argument("-t", "--test_mode", help="Test mode", action="store_true", default=False)
-    parser.add_argument("-s", "--secure_mode", help="Highly security mode", action="store_true", default=False)
-    parser.add_argument("output_file", nargs="?", help="Specify output file name", type=str, default=None)
 
-    return parser.parse_args()
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument("-t", "--test_mode", help="Test mode", action="store_true", default=False)
+    mode_group.add_argument("-s", "--secure_mode", help="Highly security mode", action="store_true", default=False)
+
+    parser.add_argument(
+        "--password",
+        action="append",
+        default=[],
+        help="Password to hash (repeatable).",
+    )
+    parser.add_argument(
+        "--password-file",
+        action="append",
+        default=[],
+        help="Path to a file with one password per line (repeatable).",
+    )
+    parser.add_argument(
+        "--out",
+        dest="output_file",
+        help="Write hashes to a file in data/.",
+    )
+    parser.add_argument(
+        "--format",
+        choices=["raw", "kracker"],
+        default="kracker",
+        help="Output format (default: kracker).",
+    )
+    parser.add_argument(
+        "--include-plaintext-metadata",
+        action="store_true",
+        default=False,
+        help="Write plaintext password metadata file (unsafe).",
+    )
+    parser.add_argument(
+        "--deterministic",
+        action="store_true",
+        default=False,
+        help="Use deterministic salt generation for reproducible outputs.",
+    )
+    parser.add_argument(
+        "--seed",
+        help="Seed string for deterministic mode.",
+    )
+
+    return parser.parse_args(argv)
 
 
-def main():
-    args = get_command_line_args()
-    
+def _load_passwords_from_file(path):
     passwords = []
+    with Path(path).open("r", encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            password = line.strip()
+            if password:
+                passwords.append(password)
+    return passwords
+
+
+def _collect_passwords(args):
+    passwords = list(args.password or [])
+    for path in args.password_file or []:
+        passwords.extend(_load_passwords_from_file(path))
+
+    if passwords:
+        return passwords
+
+    if not sys.stdin.isatty():
+        for line in sys.stdin:
+            password = line.strip()
+            if password:
+                passwords.append(password)
+        return passwords
 
     while True:
         password = input("Password for hashing: ").strip()
         if password:
             passwords.append(password)
-        
-        while True:  # Nested loop for validating 'More?' input
+
+        while True:
             more_passwords = input("More? [Y/n] ").strip().lower()
             if more_passwords in ["y", "n"]:
                 break
             print("Invalid input. Please enter 'Y' or 'N'.")
-        
+
         if more_passwords == "n":
             break
 
-    hash_maker = HashMaker(args.operation, passwords, args.output_file, args.test_mode, args.secure_mode)
+    return passwords
+
+
+def main():
+    args = get_command_line_args()
+
+    if args.operation in {"md5", "ntlm"}:
+        print("Warning: md5/ntlm are legacy algorithms intended for compatibility/testing only.")
+    if args.include_plaintext_metadata:
+        print("Warning: plaintext password metadata output is unsafe and should be used for lab only.")
+
+    passwords = _collect_passwords(args)
+    if not passwords:
+        raise ValueError("No passwords provided.")
+
+    hash_maker = HashMaker(
+        args.operation,
+        passwords,
+        args.output_file,
+        args.test_mode,
+        args.secure_mode,
+        output_format=args.format,
+        include_plaintext_metadata=args.include_plaintext_metadata,
+        deterministic=args.deterministic,
+        seed=args.seed,
+    )
 
     commands = {
         "argon": lambda: hash_maker.compute_argon(**hash_maker.parameters["argon"]),
@@ -263,14 +410,13 @@ def main():
     }
 
     hashed_passwords = commands[hash_maker.operation]()
+    formatted_hashes = hash_maker.format_hashes(hashed_passwords, hash_maker.operation)
 
-    for password, hash in zip(hash_maker.passwords, hashed_passwords):
-        print(f"Test password: {password}")
-        print(f"Hashed using: {hash_maker.operation}")
-        print(f"Hash: {hash}")
+    for hash_value in formatted_hashes:
+        print(hash_value)
 
     if hash_maker.output_file is not None:
-        hash_maker._save_to_file(hashed_passwords, hash_maker.operation)
+        hash_maker._save_to_file(formatted_hashes, hash_maker.operation)
         print(f"Saved to: {hash_maker.file_path}")
 
     

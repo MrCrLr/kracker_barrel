@@ -7,6 +7,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from core.kracker import Kracker
+from utils.config_prep import build_config
 from utils.detector import Detector
 from utils.file_io import load_target_hash
 from core.rules_gen import load_rules
@@ -75,7 +76,8 @@ def test_empty_rules_or_wordlist_fail_fast(tmp_path: Path = Path("tests/_tmp")):
     args = _make_args(password_list=empty_wordlist.name, rules_file=empty_rules.name)
 
     try:
-        Kracker(args)
+        cfg = build_config(args)
+        Kracker(cfg)
     except ValueError as exc:
         assert "Rule wordlist is empty" in str(exc) or "at least one rule" in str(exc)
     else:

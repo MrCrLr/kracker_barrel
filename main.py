@@ -1,6 +1,7 @@
 from core.kracker import Kracker, BatchManager, Workers
 from utils.reporter import Reporter
 from utils.cli import load_args, load_config
+from utils.config_prep import build_config
 import datetime
 import cProfile
 from pathlib import Path
@@ -12,8 +13,9 @@ if __name__ == "__main__":
     profiler.enable()
 
     # Load configuration from YAML file
-    args = load_args(load_config()) # <-- Add custom config if desired
-    kracker = Kracker(args)
+    args = load_args(load_config())  # <-- Add custom config if desired
+    cfg = build_config(args)
+    kracker = Kracker(cfg)
     batch_manager = BatchManager(kracker)
     reporter = Reporter(kracker)
     workers = Workers(kracker, batch_manager, reporter)

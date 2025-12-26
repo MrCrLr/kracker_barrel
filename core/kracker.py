@@ -1,128 +1,54 @@
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from multiprocessing import Event, Queue
 import time
-from pathlib import Path
 from tqdm import tqdm
 from core.hash_handler import crack_chunk, init_worker, crack_range, init_worker_range
 from core.brut_gen import get_brute_count
 from core.mask_gen import get_mask_count, compile_mask_alphabets, get_mask_space_size
-from core.rules_gen import load_rules, get_rule_count
+from core.rules_gen import get_rule_count
 from utils.detector import Detector
 from utils.file_io import (
     validate_password_file,
     load_target_hash,
     count_wordlist_entries,
 )
+from utils.config_prep import apply_defaults
 from utils.logger import PURPLE, GREEN, LIGHT_YELLOW, RESET
 
 # import pdb
 
 
 class Kracker:
-    def __init__(self, args):
-        self.operation = args.operation # dict, brut, mask, rule
-        self.target_file = Path ("data") / args.target_file
-        self.hash_digest_with_metadata = load_target_hash(self.target_file) # List of hashes to crack
-        self.password_list_path = Path("refs") / args.password_list if args.password_list else None
-        self.rules_file = args.rules_file or args.rules
-        self.rule_wordlist = args.password_list or args.wordlist1
-        self.mask_pattern = args.pattern # Mask-based attack
-        self.custom_strings = args.custom if args.custom else None # Mask-based custom string to append
-        self.brute_settings = dict(charset=args.charset if args.charset else None, min=args.min, max=args.max)
-        self.max_expansions_per_word = args.max_expansions_per_word
-        self.max_candidates = args.max_candidates
-        self.workers = args.workers
-        self.batch_size = args.batch_size
-        self.workers_defaulted = False
-        self.batch_size_defaulted = False
-        self.rules = []
+    def __init__(self, cfg):
+        self.operation = cfg["operation"]  # dict, brut, mask, rule
+        self.target_file = cfg["target_file"]
+        self.hash_digest_with_metadata = load_target_hash(self.target_file)  # List of hashes to crack
+        self.password_list_path = cfg.get("password_list_path")
+        self.rules_file = cfg.get("rules_file")
+        self.rule_wordlist = cfg.get("rule_wordlist")
+        self.mask_pattern = cfg.get("mask_pattern")  # Mask-based attack
+        self.custom_strings = cfg.get("custom_strings")  # Mask-based custom string to append
+        self.brute_settings = cfg.get("brute_settings", {})
+        self.max_expansions_per_word = cfg.get("max_expansions_per_word")
+        self.max_candidates = cfg.get("max_candidates")
+        self.rules = cfg.get("rules", [])
         self.base_words_processed = 0
         self.expanded_candidates = 0
 
         # Detect and initialize hash handler
         self.hash_type = Detector.detect(self.hash_digest_with_metadata)
-        self._set_defaults()
+        apply_defaults(cfg, self.hash_type)
+        self.workers = cfg["workers"]
+        self.batch_size = cfg["batch_size"]
+        self.workers_defaulted = cfg["workers_defaulted"]
+        self.batch_size_defaulted = cfg["batch_size_defaulted"]
         self.hash_handler = Detector.initialize(self.hash_digest_with_metadata, self.hash_type)
-        self.preload_limit = self._get_preload_limit()
+        self.preload_limit = self.workers * 2
 
         self.start_time = time.perf_counter()
-        self.goal = len(self.hash_digest_with_metadata) # Number of hashes in file to crack
+        self.goal = len(self.hash_digest_with_metadata)  # Number of hashes in file to crack
         self.found_flag = {"found": 0, "goal": self.goal, "matches": {}}  # Track progress in main process
         self.stop_event = Event()
-
-        if self.operation == "rule":
-            rules_path = self._resolve_rules_path(self.rules_file)
-            if not self.rule_wordlist:
-                raise ValueError("Rule mode requires a wordlist (password_list or --wordlist1).")
-            wordlist_path = self._resolve_wordlist_path(self.rule_wordlist)
-            if not rules_path:
-                raise ValueError("Rule mode requires a rules file (rules_file or --rules).")
-            if not wordlist_path:
-                raise ValueError(f"Rule wordlist not found: {self.rule_wordlist}")
-            if self.max_expansions_per_word is not None and self.max_expansions_per_word <= 0:
-                raise ValueError("--max-expansions-per-word must be a positive integer.")
-            if self.max_candidates is not None and self.max_candidates <= 0:
-                raise ValueError("--max-candidates must be a positive integer.")
-            self.rules_file = rules_path
-            self.password_list_path = wordlist_path
-            if not self._wordlist_has_entries(self.password_list_path):
-                raise ValueError("Rule wordlist is empty.")
-            self.rules = load_rules(rules_path)
-            if not self.rules:
-                raise ValueError("Rule mode requires at least one rule.")
-
-    @staticmethod
-    def _resolve_wordlist_path(wordlist_name):
-        if not wordlist_name:
-            return None
-        candidate = Path(wordlist_name)
-        if candidate.exists():
-            return candidate
-        candidate = Path("refs") / wordlist_name
-        if candidate.exists():
-            return candidate
-        return None
-
-    @staticmethod
-    def _resolve_rules_path(rules_name):
-        if not rules_name:
-            return None
-        candidate = Path(rules_name)
-        if candidate.exists():
-            return candidate
-        candidate = Path("refs") / rules_name
-        if candidate.exists():
-            return candidate
-        candidate = Path("core") / rules_name
-        if candidate.exists():
-            return candidate
-        return None
-
-    def _get_preload_limit(self):
-        return self.workers * 2
-
-    def _set_defaults(self):
-        cpu_count = Detector.get_cpu_count()
-        expensive_hashes = {"bcrypt", "argon", "scrypt", "pbkdf2"}
-        if self.workers is not None and self.workers <= 0:
-            raise ValueError("--workers must be a positive integer.")
-        if self.batch_size is not None and self.batch_size <= 0:
-            raise ValueError("--batch-size must be a positive integer.")
-        if self.workers is None:
-            cap = 4 if self.hash_type in expensive_hashes else 6
-            self.workers = min(cpu_count, cap)
-            self.workers_defaulted = True
-        if self.batch_size is None:
-            if self.hash_type in expensive_hashes:
-                self.batch_size = 1000
-            else:
-                self.batch_size = 20000
-            self.batch_size_defaulted = True
-
-    @staticmethod
-    def _wordlist_has_entries(wordlist_path):
-        with Path(wordlist_path).open("r", encoding="latin-1", errors="replace") as file:
-            return any(line.strip() for line in file)
 
 
 class BatchManager:

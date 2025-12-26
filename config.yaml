@@ -10,6 +10,8 @@
 # operation: dict
 # target_file: bcrypt_test2.txt
 # password_list: dictionary_eng.txt
+# workers: 6
+# batch_size: 20000
 
 
 # Standard Mask-based Operation ##
@@ -17,12 +19,16 @@ operation: mask
 target_file: pbkdf2_test.txt
 pattern: "?l?l?c?d?d"
 custom: "#!*"
+# workers: 4
+# batch_size: 1000
 
 # operation: brut
 # target_file: argon_test2.txt
 # charset: banlovme
 # min: 5
 # max: 6
+# workers: 4
+# batch_size: 1000
 
 # Configuration for Cracker Barrel Operations
 # Uncomment the relevant section for the desired operation and fill in the values.
@@ -75,3 +81,5 @@ custom: "#!*"
 # rules: complex_rules.txt
 # wordlist1: common_passwords.txt
 # wordlist2: rare_passwords.txt
+# workers: 6
+# batch_size: 20000

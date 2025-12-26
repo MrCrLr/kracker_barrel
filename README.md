@@ -67,6 +67,10 @@ Optional CSV export:
 uv run python bench.py --sweep --hash-type md5 --workers-list 1,2,4,6 --batch-sizes 200,2000,20000 --candidates 50000 --csv bench.csv
 ```
 
+Memory note (macOS):
+- `bench.py --report-rss` reports RSS and USS when `psutil` is installed. RSS includes file-backed mapped pages, so mmap can look larger than list loading; use USS for private memory comparisons.
+- Bench supports `--mode dict|rule|brut|mask` plus `--wordlist-load mmap|list` for dict/rule wordlists.
+
 ---
 
 ## **Usage**
@@ -98,6 +102,9 @@ python main.py -d <hash_type> target_hashes.txt rockyou.txt
 | `--charset <abc123>`| Character set for brute force (e.g., `AaBbCc123#?*`).                         |
 | `--min <int>`       | Minimum length for brute-force candidates (e.g., `1`).                        |
 | `--max <int>`       | Maximum length for brute-force candidates (e.g., `5`).                        |
+| Global Options      |                                                                               |
+| `--workers <int>`   | Worker processes (default: auto by hash type; cheap<=6, expensive<=4).        |
+| `--batch-size <int>`| Candidates per batch (default: cheap=20000, expensive=1000).                  |
 
 ---
 

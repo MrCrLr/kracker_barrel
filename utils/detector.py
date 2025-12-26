@@ -1,5 +1,5 @@
 import os
-from core.hash_handler import HashHandler
+from core.hash_handlers import get_handler
 
 
 class Detector:
@@ -55,22 +55,7 @@ class Detector:
         Returns:
             A hash handler instance appropriate for the hash type.
         """
-        handlers = {
-            "argon": HashHandler.Argon2Handler,
-            "scrypt": HashHandler.ScryptHandler,
-            "pbkdf2": HashHandler.PBKDF2Handler,
-            "bcrypt": HashHandler.BcryptHandler,
-            "ntlm": HashHandler.NTLMHandler,
-            "md5": HashHandler.MD5Handler,
-            "sha256": HashHandler.SHA256Handler,
-            "sha512": HashHandler.SHA512Handler,
-        }
-        try:
-            return handlers[hash_type](hash_metadata)
-        except KeyError:
-            raise ValueError(
-                f"No handler available for hash type: {hash_type}. Supported types: {', '.join(handlers.keys())}"
-            )
+        return get_handler(hash_type, hash_metadata)
 
 
     @staticmethod

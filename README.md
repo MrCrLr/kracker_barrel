@@ -218,6 +218,13 @@ Compile check:
 uv run python -m compileall -q core utils main.py tests bench.py
 ```
 
+### Adding hash algorithms
+
+- Add a handler module under `core/hash_handlers/` (one file per algorithm) and expose a handler class.
+- Register the handler in `core/hash_handlers/__init__.py` under `HANDLER_IMPORTS`.
+- Add the hash prefix mapping in `utils/detector.py` so `Detector.detect` can route to your handler.
+- Keep `core/hash_handler.py` as the shared base/shim; no changes required there for new modules.
+
 ---
 
 ## **License**

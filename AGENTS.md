@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 - `main.py` is the entry point; it wires config, batch management, and workers.
-- `core/` holds cracking logic (`kracker.py`, `hash_handler.py`) and generators (`brut_gen.py`, `mask_gen.py`, `rules_gen.py`).
+- `core/` holds cracking logic (`kracker.py`, `hash_handler.py` shim, `hash_handlers/` per-algorithm modules) and generators (`brut_gen.py`, `mask_gen.py`, `rules_gen.py`).
 - `utils/` contains CLI/config parsing, logging, reporting, and file helpers.
 - `config.yaml` stores default run configuration (operation, hash type, file paths).
 - `data/` is for target hash files; `refs/` is for wordlists and rules.

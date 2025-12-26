@@ -1,4 +1,6 @@
-from core.kracker import Kracker, BatchManager, Workers
+from core.kracker import Kracker
+from core.batch_manager import BatchManager
+from core.workers import Workers
 from utils.reporter import Reporter
 from utils.cli import load_args, load_config
 from utils.config_prep import build_config

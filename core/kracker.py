@@ -23,7 +23,7 @@ class Kracker:
         self.operation = args.operation # dict, brut, mask, rule
         self.target_file = Path ("data") / args.target_file
         self.hash_digest_with_metadata = load_target_hash(self.target_file) # List of hashes to crack
-        self.path_to_passwords = Path("refs") / args.password_list if args.password_list else None
+        self.password_list_path = Path("refs") / args.password_list if args.password_list else None
         self.rules_file = args.rules_file or args.rules
         self.rule_wordlist = args.password_list or args.wordlist1
         self.mask_pattern = args.pattern # Mask-based attack
@@ -64,8 +64,8 @@ class Kracker:
             if self.max_candidates is not None and self.max_candidates <= 0:
                 raise ValueError("--max-candidates must be a positive integer.")
             self.rules_file = rules_path
-            self.path_to_passwords = wordlist_path
-            if not self._wordlist_has_entries(self.path_to_passwords):
+            self.password_list_path = wordlist_path
+            if not self._wordlist_has_entries(self.password_list_path):
                 raise ValueError("Rule wordlist is empty.")
             self.rules = load_rules(rules_path)
             if not self.rules:
@@ -129,36 +129,36 @@ class BatchManager:
     def __init__(self, kracker):
         self.kracker = kracker
         self.batch_generator = None
-        self.total_passwords = 0
+        self.total_candidates = 0
         self.batch_queue = Queue(maxsize=kracker.preload_limit)  # Queue with a limit based on preload limit
-        self.max_batches = 0
-        self.rem_batches = 0
+        self.total_batches = 0
+        self.remaining_batches = 0
 
 
     def initialize_batch_generator(self):
         if self.kracker.operation == "dict":
-            invalid_lines = validate_password_file(self.kracker.path_to_passwords)
+            invalid_lines = validate_password_file(self.kracker.password_list_path)
             if invalid_lines:
                 print(f"Invalid lines detected: {invalid_lines}")
-            total_words = count_wordlist_entries(self.kracker.path_to_passwords)
+            total_words = count_wordlist_entries(self.kracker.password_list_path)
             self.batch_generator = self._range_generator(total_words, self.kracker.batch_size)
-            self.total_passwords = total_words
+            self.total_candidates = total_words
 
         elif self.kracker.operation == "brut":
             total_space = get_brute_count(self.kracker.brute_settings)
             self.batch_generator = self._range_generator(total_space, self.kracker.batch_size)
-            self.total_passwords = total_space
+            self.total_candidates = total_space
 
         elif self.kracker.operation == "mask":
             alphabets = compile_mask_alphabets(self.kracker.mask_pattern, self.kracker.custom_strings)
             total_space = get_mask_space_size(alphabets)
             self.batch_generator = self._range_generator(total_space, self.kracker.batch_size)
-            self.total_passwords = total_space
+            self.total_candidates = total_space
 
         elif self.kracker.operation == "rule":
-            if not self.kracker.path_to_passwords or not self.kracker.rules:
+            if not self.kracker.password_list_path or not self.kracker.rules:
                 raise ValueError("Rule mode requires a wordlist and at least one rule.")
-            total_words = count_wordlist_entries(self.kracker.path_to_passwords)
+            total_words = count_wordlist_entries(self.kracker.password_list_path)
             expansions_per_word = len(self.kracker.rules)
             if self.kracker.max_expansions_per_word is not None:
                 expansions_per_word = min(expansions_per_word, self.kracker.max_expansions_per_word)
@@ -168,15 +168,15 @@ class BatchManager:
                 max_base_words = (self.kracker.max_candidates + expansions_per_word - 1) // expansions_per_word
                 total_words = min(total_words, max_base_words)
             self.batch_generator = self._range_generator(total_words, self.kracker.batch_size)
-            self.total_passwords = get_rule_count(
-                self.kracker.path_to_passwords,
+            self.total_candidates = get_rule_count(
+                self.kracker.password_list_path,
                 self.kracker.rules,
                 max_expansions_per_word=self.kracker.max_expansions_per_word,
                 max_candidates=self.kracker.max_candidates,
             )
 
-        self.max_batches = -(-self.total_passwords // self.kracker.batch_size)
-        self.rem_batches = self.max_batches
+        self.total_batches = -(-self.total_candidates // self.kracker.batch_size)
+        self.remaining_batches = self.total_batches
 
     def _range_generator(self, total_items, batch_size):
         start = 0
@@ -197,7 +197,7 @@ class BatchManager:
                     return
                 batch = next(self.batch_generator)
                 self.batch_queue.put(batch)
-                self.rem_batches -= 1
+                self.remaining_batches -= 1
         except StopIteration:
             tqdm.write(f"{LIGHT_YELLOW}No more batches to preload.{RESET}")
 
@@ -213,9 +213,9 @@ class BatchManager:
 
 
 class Workers:
-    def __init__(self, kracker, batch_man, reporter):
+    def __init__(self, kracker, batch_manager, reporter):
         self.kracker = kracker
-        self.batch_man = batch_man
+        self.batch_manager = batch_manager
         self.reporter = reporter  # Reporter instance for logging
 
 
@@ -223,7 +223,7 @@ class Workers:
         """Main loop to process password batches and handle matches."""
         print(self.reporter)  # Calls the __str__ method to print the configuration
         try:
-            self.batch_man.initialize_batch_generator()
+            self.batch_manager.initialize_batch_generator()
         except (NotImplementedError, ValueError) as exc:
             print(f"{LIGHT_YELLOW}{exc}{RESET}")
             return
@@ -238,7 +238,7 @@ class Workers:
                     self.kracker.hash_digest_with_metadata,
                     self.kracker.stop_event,
                     self.kracker.operation,
-                    self.kracker.path_to_passwords,
+                    self.kracker.password_list_path,
                     self.kracker.rules_file,
                     self.kracker.max_expansions_per_word,
                     self.kracker.max_candidates,
@@ -260,14 +260,14 @@ class Workers:
             task_fn = crack_chunk
         try:
             print(f"{LIGHT_YELLOW}Starting batch preloading... {RESET}")
-            self.batch_man.preload_batches()
+            self.batch_manager.preload_batches()
 
             futures = []  # Queue to hold active Future objects
 
             # Initialize tqdm with total number of batches
             with tqdm(
                 desc=f"{PURPLE}Batch Processing{RESET}",
-                total=self.batch_man.max_batches,
+                total=self.batch_manager.total_batches,
                 mininterval=0.1,
                 smoothing=0.1,
                 ncols=100,
@@ -275,10 +275,10 @@ class Workers:
                 ascii=True,
             ) as progress_bar:
                 # Main processing loop
-                while futures or self.batch_man.rem_batches > 0 or not self.batch_man.batch_queue.empty():
+                while futures or self.batch_manager.remaining_batches > 0 or not self.batch_manager.batch_queue.empty():
                     # Submit tasks until the preload limit is reached
-                    while len(futures) < self.kracker.preload_limit and not self.batch_man.batch_queue.empty():
-                        batch = self.batch_man.get_batch()
+                    while len(futures) < self.kracker.preload_limit and not self.batch_manager.batch_queue.empty():
+                        batch = self.batch_manager.get_batch()
                         if batch is None:
                             break
                         if self.kracker.stop_event.is_set():
@@ -291,6 +291,12 @@ class Workers:
                         try:
                             self.process_task_result(future)
                             progress_bar.update(1)  # Update the progress bar
+                            elapsed = time.perf_counter() - self.kracker.start_time
+                            verified = self.reporter.summary_log["total_count"]
+                            rate = verified / elapsed if elapsed else 0
+                            progress_bar.set_postfix_str(
+                                f"verified={verified} rate={rate:,.0f}/s matches={self.kracker.found_flag['found']}"
+                            )
 
                             # Stop if all target hashes are matched
                             if self.kracker.found_flag["found"] == self.kracker.found_flag["goal"]:
@@ -306,8 +312,8 @@ class Workers:
                         finally:
                             futures.remove(future)
                     # Dynamically preload more batches if needed
-                    if self.batch_man.rem_batches > 0 and self.batch_man.batch_queue.empty():
-                        self.batch_man.preload_batches()
+                    if self.batch_manager.remaining_batches > 0 and self.batch_manager.batch_queue.empty():
+                        self.batch_manager.preload_batches()
 
             self.reporter.final_summary()
 

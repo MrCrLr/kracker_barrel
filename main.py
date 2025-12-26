@@ -14,9 +14,9 @@ if __name__ == "__main__":
     # Load configuration from YAML file
     args = load_args(load_config()) # <-- Add custom config if desired
     kracker = Kracker(args)
-    batch_man = BatchManager(kracker)
+    batch_manager = BatchManager(kracker)
     reporter = Reporter(kracker)
-    workers = Workers(kracker, batch_man, reporter)
+    workers = Workers(kracker, batch_manager, reporter)
 
     workers.run()
 

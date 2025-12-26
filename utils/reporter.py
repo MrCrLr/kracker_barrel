@@ -24,7 +24,7 @@ class Reporter:
             f"  Operation: {self.kracker.operation}\n"
             f"  Target: {self.kracker.target_file}\n"
             f"  Hash type: {self.kracker.hash_type}\n"
-            f"  Password list: {self.kracker.path_to_passwords}\n"
+            f"  Password list: {self.kracker.password_list_path}\n"
             f"  Batch size: {batch_label}\n"
             f"  Logical cores: {os.cpu_count()}\n"
             f"  Workers: {workers_label}\n"
@@ -35,14 +35,14 @@ class Reporter:
 
     def initialize_summary_log(self):
         if self.kracker.operation == "dict":
-            number_of_passwords = get_number_of_passwords(self.kracker.path_to_passwords)
+            number_of_passwords = get_number_of_passwords(self.kracker.password_list_path)
         elif self.kracker.operation == "brut":
             number_of_passwords = get_brute_count(self.kracker.brute_settings)
         elif self.kracker.operation == "mask":
             number_of_passwords = get_mask_count(self.kracker.mask_pattern, self.kracker.custom_strings)
         elif self.kracker.operation == "rule":
-            if self.kracker.path_to_passwords and self.kracker.rules:
-                number_of_passwords = get_rule_count(self.kracker.path_to_passwords, self.kracker.rules)
+            if self.kracker.password_list_path and self.kracker.rules:
+                number_of_passwords = get_rule_count(self.kracker.password_list_path, self.kracker.rules)
             else:
                 number_of_passwords = 0
 
@@ -53,7 +53,7 @@ class Reporter:
             "input_file": self.kracker.target_file,
             "hash_type": self.kracker.hash_type,
             "hash_parameters": None,
-            "file_scanned": self.kracker.path_to_passwords,
+            "file_scanned": self.kracker.password_list_path,
             "workers": self.kracker.workers,
             "batches": total_batches,
             "batch_size": self.kracker.batch_size,

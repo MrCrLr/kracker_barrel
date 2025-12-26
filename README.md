@@ -218,6 +218,24 @@ Compile check:
 uv run python -m compileall -q core utils main.py tests bench.py
 ```
 
+### HashMaker usage
+
+Examples:
+
+```bash
+# Kracker-compatible hashes to stdout
+python core/hashmaker.py -a pbkdf2 -p "example"
+
+# Write hashes to a file in data/
+python core/hashmaker.py -a scrypt -p "example" -o test_hashes.txt
+
+# Deterministic fixtures (reproducible salts)
+python core/hashmaker.py -a pbkdf2 -p "example" -d --seed "fixture-seed"
+
+# Passwords from a file (one per line)
+python core/hashmaker.py -a bcrypt -i refs/wordlist.txt
+```
+
 ### Adding hash algorithms
 
 - Add a handler module under `core/hash_handlers/` (one file per algorithm) and expose a handler class.

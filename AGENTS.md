@@ -15,7 +15,7 @@
 - `python main.py -d <hash_type> data/targets.txt refs/wordlist.txt` to run a dictionary attack.
 - `python main.py -m <hash_type> data/targets.txt --pattern "?l?l?d?d"` for mask-based attacks.
 - `python main.py -b <hash_type> data/targets.txt --charset "abc123" --min 1 --max 4` for brute-force.
-- `python core/hashmaker.py -o pbkdf2 -t --out output.txt --password "example"` to generate test hashes.
+- `python core/hashmaker.py -a pbkdf2 -t -o output.txt -p "example"` to generate test hashes.
 
 ## Coding Style & Naming Conventions
 - Python: 4-space indentation, no tabs.

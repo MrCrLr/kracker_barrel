@@ -22,7 +22,7 @@ def test_output_file_none_does_not_crash():
 
 def test_mutually_exclusive_modes():
     try:
-        get_command_line_args(["-o", "md5", "-t", "-s"])
+        get_command_line_args(["-a", "md5", "-t", "-s"])
     except SystemExit:
         return
     raise AssertionError("Expected mutually exclusive mode flags to error.")

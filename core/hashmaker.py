@@ -279,7 +279,8 @@ def get_command_line_args(argv=None):
     parser = argparse.ArgumentParser(description="Password Hashing Utility")
 
     parser.add_argument(
-        "-o", "--operation",
+        "-a", "--algorithm",
+        dest="operation",
         choices=["argon", "bcrypt", "scrypt", "pbkdf2", "md5", "ntlm", "sha256", "sha512"],
         help="Choose a hash algorithm to use",
         required=True,
@@ -290,36 +291,44 @@ def get_command_line_args(argv=None):
     mode_group.add_argument("-s", "--secure_mode", help="Highly security mode", action="store_true", default=False)
 
     parser.add_argument(
-        "--password",
+        "-p", "--password",
         action="append",
         default=[],
         help="Password to hash (repeatable).",
     )
     parser.add_argument(
-        "--password-file",
+        "-i", "--input-file",
+        dest="password_file",
         action="append",
         default=[],
         help="Path to a file with one password per line (repeatable).",
     )
     parser.add_argument(
-        "--out",
+        "--password-file",
+        dest="password_file",
+        action="append",
+        default=[],
+        help="Path to a file with one password per line (repeatable).",
+    )
+    parser.add_argument(
+        "-o", "--output-file",
         dest="output_file",
         help="Write hashes to a file in data/.",
     )
     parser.add_argument(
-        "--format",
+        "-f", "--format",
         choices=["raw", "kracker"],
         default="kracker",
         help="Output format (default: kracker).",
     )
     parser.add_argument(
-        "--include-plaintext-metadata",
+        "-m", "--include-plaintext-metadata",
         action="store_true",
         default=False,
         help="Write plaintext password metadata file (unsafe).",
     )
     parser.add_argument(
-        "--deterministic",
+        "-d", "--deterministic",
         action="store_true",
         default=False,
         help="Use deterministic salt generation for reproducible outputs.",

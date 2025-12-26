@@ -1,0 +1,6 @@
+# Profiling artifacts
+/data/*.prof
+/data/*.csv
+
+# Generated plots
+/*.png

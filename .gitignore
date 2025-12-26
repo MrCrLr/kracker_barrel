@@ -1,13 +1,12 @@
-# Ignore these directories in the main directory
+# Project data/artifacts
 /refs
-/docs
-/logs
-/gpu
-/tests
 /data
+/logs
+/profiling/data
+/experiments
+
+# Local-only tooling/output
 /tools
-/profiling
-/helpers
 
 # Ignore virtual environments
 .venv/
@@ -24,4 +23,4 @@ __pycache__/
 .vscode/
 
 # Ignore log files
-hash_errors.log
+*.log

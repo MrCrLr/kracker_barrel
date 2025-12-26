@@ -694,6 +694,10 @@ _RULES = None
 _MODE = None
 _MAX_EXPANSIONS_PER_WORD = None
 _MAX_CANDIDATES = None
+_CHARSET_BYTES = None
+_LENGTH_TABLE = None
+_MASK_ALPHABETS = None
+_MICRO_BATCH = 1024
 
 
 def get_hash_handler(hash_type, hash_digest_with_metadata):
@@ -730,34 +734,54 @@ def init_worker_range(
     hash_digest_with_metadata,
     stop_event,
     mode,
-    wordlist_path,
-    rules_file,
-    max_expansions_per_word,
-    max_candidates,
+    wordlist_path=None,
+    rules_file=None,
+    max_expansions_per_word=None,
+    max_candidates=None,
+    brut_settings=None,
+    mask_pattern=None,
+    custom_strings=None,
+    micro_batch=1024,
 ):
     global _HANDLER, _STOP, _WORDLIST_BYTES, _RULES, _MODE, _MAX_EXPANSIONS_PER_WORD, _MAX_CANDIDATES
+    global _CHARSET_BYTES, _LENGTH_TABLE, _MASK_ALPHABETS, _MICRO_BATCH
     _HANDLER = get_hash_handler(hash_type, hash_digest_with_metadata)
     _STOP = stop_event
     _MODE = mode
     _MAX_EXPANSIONS_PER_WORD = max_expansions_per_word
     _MAX_CANDIDATES = max_candidates
+    _MICRO_BATCH = micro_batch
 
-    with open(wordlist_path, "r", encoding="latin-1", errors="replace") as file:
-        wordlist = []
-        for line in file:
-            cleaned = line.strip()
-            if not cleaned:
-                continue
-            if "�" in cleaned:
-                continue
-            wordlist.append(cleaned.encode("utf-8"))
-        _WORDLIST_BYTES = wordlist
+    _WORDLIST_BYTES = None
+    if wordlist_path:
+        with open(wordlist_path, "r", encoding="latin-1", errors="replace") as file:
+            wordlist = []
+            for line in file:
+                cleaned = line.strip()
+                if not cleaned:
+                    continue
+                if "�" in cleaned:
+                    continue
+                wordlist.append(cleaned.encode("utf-8"))
+            _WORDLIST_BYTES = wordlist
 
     _RULES = None
     if mode == "rule":
         from core.rules_gen import load_rules
 
         _RULES = load_rules(rules_file)
+
+    if mode == "brut":
+        from core.brut_gen import build_length_table
+
+        charset = brut_settings["charset"].encode("utf-8")
+        _CHARSET_BYTES = charset
+        _LENGTH_TABLE = build_length_table(brut_settings["min"], brut_settings["max"], len(charset))
+
+    if mode == "mask":
+        from core.mask_gen import compile_mask_alphabets
+
+        _MASK_ALPHABETS = compile_mask_alphabets(mask_pattern, custom_strings)
 
 
 # Sends a chunk of passwords to be verified instead of one at a time
@@ -829,6 +853,60 @@ def crack_range(range_tuple):
             "base_words_processed": base_words_processed,
             "expanded_generated": expanded_generated,
             "verified_count": len(candidates),
+        }
+
+    if _MODE == "brut":
+        from core.brut_gen import index_to_brut_candidate
+
+        matches = {}
+        verified_count = 0
+        candidates = []
+        for i in range(start_idx, end_idx):
+            if _STOP is not None and _STOP.is_set():
+                break
+            candidates.append(index_to_brut_candidate(i, _CHARSET_BYTES, _LENGTH_TABLE))
+            if len(candidates) >= _MICRO_BATCH:
+                batch_matches = _HANDLER.verify(candidates)
+                if batch_matches:
+                    matches.update(batch_matches)
+                verified_count += len(candidates)
+                candidates = []
+        if candidates:
+            batch_matches = _HANDLER.verify(candidates)
+            if batch_matches:
+                matches.update(batch_matches)
+            verified_count += len(candidates)
+        return matches, {
+            "base_words_processed": 0,
+            "expanded_generated": 0,
+            "verified_count": verified_count,
+        }
+
+    if _MODE == "mask":
+        from core.mask_gen import index_to_mask_candidate
+
+        matches = {}
+        verified_count = 0
+        candidates = []
+        for i in range(start_idx, end_idx):
+            if _STOP is not None and _STOP.is_set():
+                break
+            candidates.append(index_to_mask_candidate(i, _MASK_ALPHABETS))
+            if len(candidates) >= _MICRO_BATCH:
+                batch_matches = _HANDLER.verify(candidates)
+                if batch_matches:
+                    matches.update(batch_matches)
+                verified_count += len(candidates)
+                candidates = []
+        if candidates:
+            batch_matches = _HANDLER.verify(candidates)
+            if batch_matches:
+                matches.update(batch_matches)
+            verified_count += len(candidates)
+        return matches, {
+            "base_words_processed": 0,
+            "expanded_generated": 0,
+            "verified_count": verified_count,
         }
 
     return {}, {"base_words_processed": 0, "expanded_generated": 0, "verified_count": 0}

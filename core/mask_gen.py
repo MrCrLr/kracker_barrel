@@ -67,6 +67,41 @@ def generate_mask_candidates(mask, custom_strings=None):
         yield "".join(combo).encode("utf-8")
 
 
+def compile_mask_alphabets(mask, custom_strings=None):
+    custom_strings = dict(c=custom_strings) or {}
+    alphabets = []
+
+    for m in mask.split("?")[1:]:
+        token = f"?{m}"
+        if token in MASK_MAP and MASK_MAP[token] is not None:
+            alphabets.append(MASK_MAP[token].encode("utf-8"))
+        elif m in custom_strings:
+            alphabets.append(str(custom_strings[m]).encode("utf-8"))
+        else:
+            raise ValueError(f"Invalid or uninitialized mask placeholder: ?{m}")
+    return alphabets
+
+
+def get_mask_space_size(alphabets):
+    total = 1
+    for alphabet in alphabets:
+        total *= len(alphabet)
+    return total
+
+
+def index_to_mask_candidate(index, alphabets):
+    if not alphabets:
+        return b""
+    chars = []
+    value = index
+    for alphabet in reversed(alphabets):
+        base = len(alphabet)
+        value, rem = divmod(value, base)
+        chars.append(alphabet[rem:rem + 1])
+    chars.reverse()
+    return b"".join(chars)
+
+
 def yield_maskbased_batches(generator, batch_size):
     batch = []
     total_batches = 0

@@ -1,4 +1,5 @@
 import itertools
+from typing import List, Tuple
 
 
 def generate_brute_candidates(settings):
@@ -45,3 +46,44 @@ def get_brute_count(settings):
     for length in range(min_length, max_length + 1):
         total_count += len(charset) ** length
     return total_count
+
+
+def build_length_table(min_length: int, max_length: int, charset_length: int) -> List[Tuple[int, int, int]]:
+    """
+    Build a table of (length, start_index, end_index) for global index mapping.
+    """
+    table = []
+    start = 0
+    for length in range(min_length, max_length + 1):
+        count = charset_length ** length
+        end = start + count
+        table.append((length, start, end))
+        start = end
+    return table
+
+
+def index_to_candidate(index: int, charset: bytes, length: int) -> bytes:
+    """
+    Map an index to a candidate using base-N encoding (N = len(charset)).
+    """
+    if length <= 0:
+        return b""
+    base = len(charset)
+    chars = []
+    value = index
+    for _ in range(length):
+        value, rem = divmod(value, base)
+        chars.append(charset[rem:rem + 1])
+    chars.reverse()
+    return b"".join(chars)
+
+
+def index_to_brut_candidate(index: int, charset: bytes, length_table: List[Tuple[int, int, int]]) -> bytes:
+    """
+    Map a global index to the correct length bucket and candidate bytes.
+    """
+    for length, start, end in length_table:
+        if start <= index < end:
+            local_index = index - start
+            return index_to_candidate(local_index, charset, length)
+    raise IndexError("Index out of range for brute-force search space.")

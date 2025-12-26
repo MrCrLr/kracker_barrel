@@ -4,8 +4,8 @@ import time
 from pathlib import Path
 from tqdm import tqdm
 from core.hash_handler import crack_chunk, init_worker, crack_range, init_worker_range
-from core.brut_gen import generate_brute_candidates, yield_brute_batches, get_brute_count
-from core.mask_gen import generate_mask_candidates, yield_maskbased_batches, get_mask_count
+from core.brut_gen import get_brute_count
+from core.mask_gen import get_mask_count, compile_mask_alphabets, get_mask_space_size
 from core.rules_gen import load_rules, get_rule_count
 from utils.detector import Detector
 from utils.file_io import (
@@ -145,14 +145,15 @@ class BatchManager:
             self.total_passwords = total_words
 
         elif self.kracker.operation == "brut":
-            generator = generate_brute_candidates(self.kracker.brute_settings)
-            self.batch_generator = yield_brute_batches(generator, self.kracker.batch_size)
-            self.total_passwords = get_brute_count(self.kracker.brute_settings)
+            total_space = get_brute_count(self.kracker.brute_settings)
+            self.batch_generator = self._range_generator(total_space, self.kracker.batch_size)
+            self.total_passwords = total_space
 
         elif self.kracker.operation == "mask":
-            generator = generate_mask_candidates(self.kracker.mask_pattern, self.kracker.custom_strings)
-            self.batch_generator = yield_maskbased_batches(generator, self.kracker.batch_size)
-            self.total_passwords = get_mask_count(self.kracker.mask_pattern, self.kracker.custom_strings)
+            alphabets = compile_mask_alphabets(self.kracker.mask_pattern, self.kracker.custom_strings)
+            total_space = get_mask_space_size(alphabets)
+            self.batch_generator = self._range_generator(total_space, self.kracker.batch_size)
+            self.total_passwords = total_space
 
         elif self.kracker.operation == "rule":
             if not self.kracker.path_to_passwords or not self.kracker.rules:
@@ -227,7 +228,7 @@ class Workers:
             print(f"{LIGHT_YELLOW}{exc}{RESET}")
             return
 
-        use_ranges = self.kracker.operation in {"dict", "rule"}
+        use_ranges = self.kracker.operation in {"dict", "rule", "brut", "mask"}
         if use_ranges:
             executor = ProcessPoolExecutor(
                 max_workers=self.kracker.workers,
@@ -241,6 +242,9 @@ class Workers:
                     self.kracker.rules_file,
                     self.kracker.max_expansions_per_word,
                     self.kracker.max_candidates,
+                    self.kracker.brute_settings,
+                    self.kracker.mask_pattern,
+                    self.kracker.custom_strings,
                 ),
             )
             task_fn = crack_range

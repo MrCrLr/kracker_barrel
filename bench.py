@@ -9,6 +9,8 @@ from pathlib import Path
 
 from core.hash_handler import crack_range, init_worker_range
 from core.hashmaker import HashMaker
+from core.brut_gen import get_brute_count
+from core.mask_gen import compile_mask_alphabets, get_mask_space_size
 
 
 def write_wordlist(total, password, mode):
@@ -83,11 +85,29 @@ def default_batch_size(hash_type):
     return 1000 if hash_type in expensive_hashes else 20000
 
 
-def run_bench(hash_type, batch_size, workers, candidates_count, mode, wordlist_path, rules_path):
+def run_bench(
+    hash_type,
+    batch_size,
+    workers,
+    candidates_count,
+    mode,
+    wordlist_path,
+    rules_path,
+    brut_settings,
+    mask_pattern,
+    custom_strings,
+):
     password = "benchpass"
     target_hashes = build_target_hash(hash_type, password)
-    total_words = candidates_count
-    ranges = [(i, min(i + batch_size, total_words)) for i in range(0, total_words, batch_size)]
+    if mode == "brut":
+        total_space = get_brute_count(brut_settings)
+    elif mode == "mask":
+        alphabets = compile_mask_alphabets(mask_pattern, custom_strings)
+        total_space = get_mask_space_size(alphabets)
+    else:
+        total_space = candidates_count
+    total_space = min(total_space, candidates_count)
+    ranges = [(i, min(i + batch_size, total_space)) for i in range(0, total_space, batch_size)]
     stop_event = Event()
 
     start = time.perf_counter()
@@ -104,6 +124,9 @@ def run_bench(hash_type, batch_size, workers, candidates_count, mode, wordlist_p
             rules_path,
             None,
             None,
+            brut_settings,
+            mask_pattern,
+            custom_strings,
         ),
     ) as executor:
         futures = [executor.submit(crack_range, work_range) for work_range in ranges]
@@ -130,7 +153,12 @@ def run_bench(hash_type, batch_size, workers, candidates_count, mode, wordlist_p
 def main():
     parser = argparse.ArgumentParser(description="Kracker Barrel benchmark harness")
     parser.add_argument("--hash-type", type=str, default="md5")
-    parser.add_argument("--mode", type=str, choices=["dict", "rule"], default="dict")
+    parser.add_argument("--mode", type=str, choices=["dict", "rule", "brut", "mask"], default="dict")
+    parser.add_argument("--charset", type=str, default="abcdefghijklmnopqrstuvwxyz")
+    parser.add_argument("--min", type=int, default=1)
+    parser.add_argument("--max", type=int, default=4)
+    parser.add_argument("--pattern", type=str, default="?l?l?l")
+    parser.add_argument("--custom", type=str, default=None)
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--workers", type=int, default=None)
     parser.add_argument("--candidates", type=int, default=10000)
@@ -144,12 +172,15 @@ def main():
     workers = args.workers if args.workers is not None else default_workers(hash_type)
     batch_size = args.batch_size if args.batch_size is not None else default_batch_size(hash_type)
 
-    wordlist_path = write_wordlist(args.candidates, "benchpass", args.mode)
+    wordlist_path = None
     rules_path = None
-    if args.mode == "rule":
-        rules_path = write_rules_file()
-    else:
-        rules_path = wordlist_path
+    if args.mode in {"dict", "rule"}:
+        wordlist_path = write_wordlist(args.candidates, "benchpass", args.mode)
+        if args.mode == "rule":
+            rules_path = write_rules_file()
+        else:
+            rules_path = wordlist_path
+    brut_settings = {"charset": args.charset, "min": args.min, "max": args.max}
 
     try:
         if args.sweep:
@@ -160,7 +191,18 @@ def main():
 
             for w in workers_list:
                 for b in batch_sizes:
-                    result = run_bench(hash_type, b, w, args.candidates, args.mode, wordlist_path, rules_path)
+                    result = run_bench(
+                        hash_type,
+                        b,
+                        w,
+                        args.candidates,
+                        args.mode,
+                        wordlist_path,
+                        rules_path,
+                        brut_settings,
+                        args.pattern,
+                        args.custom,
+                    )
                     results.append(result)
                     if best is None or result["rate"] > best["rate"]:
                         best = result
@@ -195,12 +237,24 @@ def main():
                 )
             return
 
-        result = run_bench(hash_type, batch_size, workers, args.candidates, args.mode, wordlist_path, rules_path)
+        result = run_bench(
+            hash_type,
+            batch_size,
+            workers,
+            args.candidates,
+            args.mode,
+            wordlist_path,
+            rules_path,
+            brut_settings,
+            args.pattern,
+            args.custom,
+        )
         print(f"Candidates verified: {result['candidates']}")
         print(f"Elapsed: {result['elapsed']:.2f}s")
         print(f"Candidates/sec: {result['rate']:.1f}")
     finally:
-        wordlist_path.unlink(missing_ok=True)
+        if wordlist_path:
+            wordlist_path.unlink(missing_ok=True)
         if rules_path and rules_path != wordlist_path:
             rules_path.unlink(missing_ok=True)
 

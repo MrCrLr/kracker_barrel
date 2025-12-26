@@ -16,12 +16,38 @@ class Workers:
     def run(self):
         """Main loop to process password batches and handle matches."""
         print(self.reporter)  # Calls the __str__ method to print the configuration
+        if not self._initialize_batches():
+            return
+
+        executor, task_fn = self._build_executor()
+        try:
+            print(f"{LIGHT_YELLOW}Starting batch preloading... {RESET}")
+            self.batch_manager.preload_batches()
+            futures = []
+            with self._progress_bar() as progress_bar:
+                early_exit = self._process_loop(executor, task_fn, futures, progress_bar)
+                if early_exit:
+                    return
+
+            self.reporter.final_summary()
+
+        except KeyboardInterrupt:
+            self.kracker.stop_event.set()
+            self.kracker.found_flag["found"] = -1
+            print(f"{LIGHT_YELLOW}Process interrupted.{RESET}")
+        finally:
+            executor.shutdown(cancel_futures=True)
+            print(f"{PURPLE}Program terminated.{RESET}")
+
+    def _initialize_batches(self):
         try:
             self.batch_manager.initialize_batch_generator()
         except (NotImplementedError, ValueError) as exc:
             print(f"{LIGHT_YELLOW}{exc}{RESET}")
-            return
+            return False
+        return True
 
+    def _build_executor(self):
         use_ranges = self.kracker.operation in {"dict", "rule", "brut", "mask"}
         if use_ranges:
             executor = ProcessPoolExecutor(
@@ -52,72 +78,80 @@ class Workers:
                 initargs=(self.kracker.hash_type, self.kracker.hash_digest_with_metadata, self.kracker.stop_event),
             )
             task_fn = crack_chunk
-        try:
-            print(f"{LIGHT_YELLOW}Starting batch preloading... {RESET}")
+        return executor, task_fn
+
+    def _progress_bar(self):
+        return tqdm(
+            desc=f"{PURPLE}Batch Processing{RESET}",
+            total=self.batch_manager.total_batches,
+            mininterval=0.1,
+            smoothing=0.1,
+            ncols=100,
+            leave=True,
+            ascii=True,
+        )
+
+    def _process_loop(self, executor, task_fn, futures, progress_bar):
+        while self._should_continue(futures):
+            self._submit_futures(executor, task_fn, futures)
+            early_exit = self._process_futures(futures, progress_bar)
+            if early_exit:
+                return True
+            self._maybe_preload_more()
+        return False
+
+    def _submit_futures(self, executor, task_fn, futures):
+        while len(futures) < self.kracker.preload_limit and not self.batch_manager.batch_queue.empty():
+            batch = self.batch_manager.get_batch()
+            if batch is None:
+                break
+            if self.kracker.stop_event.is_set():
+                break
+            future = executor.submit(task_fn, batch)
+            futures.append(future)
+
+    def _process_futures(self, futures, progress_bar):
+        for future in as_completed(list(futures)):
+            try:
+                self.process_task_result(future)
+                self._update_progress(progress_bar)
+                if self._goal_reached(futures):
+                    return True
+            except Exception as e:
+                print(f"Error processing future: {e}")
+            finally:
+                futures.remove(future)
+        return False
+
+    def _update_progress(self, progress_bar):
+        progress_bar.update(1)
+        elapsed = time.perf_counter() - self.kracker.start_time
+        verified = self.reporter.summary_log["total_count"]
+        rate = verified / elapsed if elapsed else 0
+        progress_bar.set_postfix_str(
+            f"verified={verified} rate={rate:,.0f}/s matches={self.kracker.found_flag['found']}"
+        )
+
+    def _goal_reached(self, futures):
+        if self.kracker.found_flag["found"] != self.kracker.found_flag["goal"]:
+            return False
+        self.kracker.stop_event.set()
+        for pending in futures:
+            if not pending.done():
+                pending.cancel()
+        self.reporter.final_summary()
+        return True
+
+    def _should_continue(self, futures):
+        return (
+            futures
+            or self.batch_manager.remaining_batches > 0
+            or not self.batch_manager.batch_queue.empty()
+        )
+
+    def _maybe_preload_more(self):
+        if self.batch_manager.remaining_batches > 0 and self.batch_manager.batch_queue.empty():
             self.batch_manager.preload_batches()
-
-            futures = []  # Queue to hold active Future objects
-
-            # Initialize tqdm with total number of batches
-            with tqdm(
-                desc=f"{PURPLE}Batch Processing{RESET}",
-                total=self.batch_manager.total_batches,
-                mininterval=0.1,
-                smoothing=0.1,
-                ncols=100,
-                leave=True,
-                ascii=True,
-            ) as progress_bar:
-                # Main processing loop
-                while futures or self.batch_manager.remaining_batches > 0 or not self.batch_manager.batch_queue.empty():
-                    # Submit tasks until the preload limit is reached
-                    while len(futures) < self.kracker.preload_limit and not self.batch_manager.batch_queue.empty():
-                        batch = self.batch_manager.get_batch()
-                        if batch is None:
-                            break
-                        if self.kracker.stop_event.is_set():
-                            break
-                        future = executor.submit(task_fn, batch)
-                        futures.append(future)
-
-                    # Process completed futures
-                    for future in as_completed(futures):
-                        try:
-                            self.process_task_result(future)
-                            progress_bar.update(1)  # Update the progress bar
-                            elapsed = time.perf_counter() - self.kracker.start_time
-                            verified = self.reporter.summary_log["total_count"]
-                            rate = verified / elapsed if elapsed else 0
-                            progress_bar.set_postfix_str(
-                                f"verified={verified} rate={rate:,.0f}/s matches={self.kracker.found_flag['found']}"
-                            )
-
-                            # Stop if all target hashes are matched
-                            if self.kracker.found_flag["found"] == self.kracker.found_flag["goal"]:
-                                self.kracker.stop_event.set()
-                                for pending in futures:
-                                    if not pending.done():
-                                        pending.cancel()
-                                self.reporter.final_summary()
-                                return  # Exit immediately
-
-                        except Exception as e:
-                            print(f"Error processing future: {e}")
-                        finally:
-                            futures.remove(future)
-                    # Dynamically preload more batches if needed
-                    if self.batch_manager.remaining_batches > 0 and self.batch_manager.batch_queue.empty():
-                        self.batch_manager.preload_batches()
-
-            self.reporter.final_summary()
-
-        except KeyboardInterrupt:
-            self.kracker.stop_event.set()
-            self.kracker.found_flag["found"] = -1
-            print(f"{LIGHT_YELLOW}Process interrupted.{RESET}")
-        finally:
-            executor.shutdown(cancel_futures=True)
-            print(f"{PURPLE}Program terminated.{RESET}")
 
     # Process the results from completed futures
     def process_task_result(self, task_result):

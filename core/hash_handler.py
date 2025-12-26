@@ -689,6 +689,11 @@ HashHandler.SHA512Handler = SHA512Handler
 
 _HANDLER = None
 _STOP = None
+_WORDLIST_BYTES = None
+_RULES = None
+_MODE = None
+_MAX_EXPANSIONS_PER_WORD = None
+_MAX_CANDIDATES = None
 
 
 def get_hash_handler(hash_type, hash_digest_with_metadata):
@@ -720,6 +725,41 @@ def init_worker(hash_type, hash_digest_with_metadata, stop_event):
     _STOP = stop_event
 
 
+def init_worker_range(
+    hash_type,
+    hash_digest_with_metadata,
+    stop_event,
+    mode,
+    wordlist_path,
+    rules_file,
+    max_expansions_per_word,
+    max_candidates,
+):
+    global _HANDLER, _STOP, _WORDLIST_BYTES, _RULES, _MODE, _MAX_EXPANSIONS_PER_WORD, _MAX_CANDIDATES
+    _HANDLER = get_hash_handler(hash_type, hash_digest_with_metadata)
+    _STOP = stop_event
+    _MODE = mode
+    _MAX_EXPANSIONS_PER_WORD = max_expansions_per_word
+    _MAX_CANDIDATES = max_candidates
+
+    with open(wordlist_path, "r", encoding="latin-1", errors="replace") as file:
+        wordlist = []
+        for line in file:
+            cleaned = line.strip()
+            if not cleaned:
+                continue
+            if "�" in cleaned:
+                continue
+            wordlist.append(cleaned.encode("utf-8"))
+        _WORDLIST_BYTES = wordlist
+
+    _RULES = None
+    if mode == "rule":
+        from core.rules_gen import load_rules
+
+        _RULES = load_rules(rules_file)
+
+
 # Sends a chunk of passwords to be verified instead of one at a time
 def crack_chunk(chunk):
     if _STOP is not None and _STOP.is_set():
@@ -727,3 +767,68 @@ def crack_chunk(chunk):
 
     matched_passwords = _HANDLER.verify(chunk)
     return matched_passwords, len(chunk)
+
+
+def crack_range(range_tuple):
+    if _STOP is not None and _STOP.is_set():
+        return {}, {"base_words_processed": 0, "expanded_generated": 0, "verified_count": 0}
+
+    start_idx, end_idx = range_tuple
+    if _MODE == "dict":
+        candidates = _WORDLIST_BYTES[start_idx:end_idx]
+        matches = _HANDLER.verify(candidates) if candidates else {}
+        count = len(candidates)
+        return matches, {
+            "base_words_processed": count,
+            "expanded_generated": count,
+            "verified_count": count,
+        }
+
+    if _MODE == "rule":
+        if not _RULES:
+            return {}, {"base_words_processed": 0, "expanded_generated": 0, "verified_count": 0}
+        expansions_per_word = len(_RULES)
+        if _MAX_EXPANSIONS_PER_WORD is not None:
+            expansions_per_word = min(expansions_per_word, _MAX_EXPANSIONS_PER_WORD)
+        if expansions_per_word <= 0:
+            return {}, {"base_words_processed": 0, "expanded_generated": 0, "verified_count": 0}
+
+        range_cap = None
+        if _MAX_CANDIDATES is not None:
+            offset = start_idx * expansions_per_word
+            if offset >= _MAX_CANDIDATES:
+                return {}, {"base_words_processed": 0, "expanded_generated": 0, "verified_count": 0}
+            remaining = _MAX_CANDIDATES - offset
+            range_cap = min(remaining, (end_idx - start_idx) * expansions_per_word)
+
+        from core.rules_gen import apply_rules
+
+        base_words_processed = 0
+        expanded_generated = 0
+        candidates = []
+
+        for word_bytes in _WORDLIST_BYTES[start_idx:end_idx]:
+            if _STOP is not None and _STOP.is_set():
+                break
+            word = word_bytes.decode("utf-8", errors="replace")
+            base_words_processed += 1
+            per_word_count = 0
+            for transformed in apply_rules(word, _RULES):
+                if _MAX_EXPANSIONS_PER_WORD is not None and per_word_count >= _MAX_EXPANSIONS_PER_WORD:
+                    break
+                if range_cap is not None and expanded_generated >= range_cap:
+                    break
+                candidates.append(transformed.encode("utf-8"))
+                per_word_count += 1
+                expanded_generated += 1
+            if range_cap is not None and expanded_generated >= range_cap:
+                break
+
+        matches = _HANDLER.verify(candidates) if candidates else {}
+        return matches, {
+            "base_words_processed": base_words_processed,
+            "expanded_generated": expanded_generated,
+            "verified_count": len(candidates),
+        }
+
+    return {}, {"base_words_processed": 0, "expanded_generated": 0, "verified_count": 0}

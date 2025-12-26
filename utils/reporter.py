@@ -89,7 +89,7 @@ class Reporter:
             )
 
         self.summary_log["elapsed_time"] = time.perf_counter() - self.kracker.start_time
-        if self.kracker.operation == "rule":
+        if self.kracker.operation in {"rule", "dict"}:
             self.summary_log["base_words_processed"] = self.kracker.base_words_processed
             self.summary_log["expanded_candidates"] = self.kracker.expanded_candidates
         display_summary(self.kracker.found_flag, self.summary_log)

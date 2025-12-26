@@ -3,12 +3,16 @@ from multiprocessing import Event, Queue
 import time
 from pathlib import Path
 from tqdm import tqdm
-from core.hash_handler import crack_chunk, init_worker
+from core.hash_handler import crack_chunk, init_worker, crack_range, init_worker_range
 from core.brut_gen import generate_brute_candidates, yield_brute_batches, get_brute_count
 from core.mask_gen import generate_mask_candidates, yield_maskbased_batches, get_mask_count
-from core.rules_gen import load_rules, apply_rules, yield_rule_batches, get_rule_count
+from core.rules_gen import load_rules, get_rule_count
 from utils.detector import Detector
-from utils.file_io import get_number_of_passwords, yield_dictionary_batches, validate_password_file, load_target_hash
+from utils.file_io import (
+    validate_password_file,
+    load_target_hash,
+    count_wordlist_entries,
+)
 from utils.logger import PURPLE, GREEN, LIGHT_YELLOW, RESET
 
 # import pdb
@@ -136,8 +140,9 @@ class BatchManager:
             invalid_lines = validate_password_file(self.kracker.path_to_passwords)
             if invalid_lines:
                 print(f"Invalid lines detected: {invalid_lines}")
-            self.batch_generator = yield_dictionary_batches(self.kracker.path_to_passwords, self.kracker.batch_size)
-            self.total_passwords = get_number_of_passwords(self.kracker.path_to_passwords)
+            total_words = count_wordlist_entries(self.kracker.path_to_passwords)
+            self.batch_generator = self._range_generator(total_words, self.kracker.batch_size)
+            self.total_passwords = total_words
 
         elif self.kracker.operation == "brut":
             generator = generate_brute_candidates(self.kracker.brute_settings)
@@ -152,8 +157,16 @@ class BatchManager:
         elif self.kracker.operation == "rule":
             if not self.kracker.path_to_passwords or not self.kracker.rules:
                 raise ValueError("Rule mode requires a wordlist and at least one rule.")
-            generator = self._generate_rule_candidates()
-            self.batch_generator = yield_rule_batches(generator, self.kracker.batch_size)
+            total_words = count_wordlist_entries(self.kracker.path_to_passwords)
+            expansions_per_word = len(self.kracker.rules)
+            if self.kracker.max_expansions_per_word is not None:
+                expansions_per_word = min(expansions_per_word, self.kracker.max_expansions_per_word)
+            if expansions_per_word <= 0:
+                total_words = 0
+            if self.kracker.max_candidates is not None and expansions_per_word > 0:
+                max_base_words = (self.kracker.max_candidates + expansions_per_word - 1) // expansions_per_word
+                total_words = min(total_words, max_base_words)
+            self.batch_generator = self._range_generator(total_words, self.kracker.batch_size)
             self.total_passwords = get_rule_count(
                 self.kracker.path_to_passwords,
                 self.kracker.rules,
@@ -164,28 +177,12 @@ class BatchManager:
         self.max_batches = -(-self.total_passwords // self.kracker.batch_size)
         self.rem_batches = self.max_batches
 
-    def _generate_rule_candidates(self):
-        max_expansions = self.kracker.max_expansions_per_word
-        max_candidates = self.kracker.max_candidates
-        generated = 0
-        with self.kracker.path_to_passwords.open("r", encoding="latin-1", errors="replace") as file:
-            for line in file:
-                if self.kracker.stop_event.is_set():
-                    return
-                word = line.strip()
-                if not word:
-                    continue
-                self.kracker.base_words_processed += 1
-                per_word_count = 0
-                for transformed in apply_rules(word, self.kracker.rules):
-                    if max_expansions is not None and per_word_count >= max_expansions:
-                        break
-                    yield transformed.encode("utf-8")
-                    per_word_count += 1
-                    generated += 1
-                    self.kracker.expanded_candidates += 1
-                    if max_candidates is not None and generated >= max_candidates:
-                        return
+    def _range_generator(self, total_items, batch_size):
+        start = 0
+        while start < total_items:
+            end = min(start + batch_size, total_items)
+            yield (start, end)
+            start = end
 
 
     def preload_batches(self):
@@ -230,11 +227,30 @@ class Workers:
             print(f"{LIGHT_YELLOW}{exc}{RESET}")
             return
 
-        executor = ProcessPoolExecutor(
-            max_workers=self.kracker.workers,
-            initializer=init_worker,
-            initargs=(self.kracker.hash_type, self.kracker.hash_digest_with_metadata, self.kracker.stop_event),
-        )
+        use_ranges = self.kracker.operation in {"dict", "rule"}
+        if use_ranges:
+            executor = ProcessPoolExecutor(
+                max_workers=self.kracker.workers,
+                initializer=init_worker_range,
+                initargs=(
+                    self.kracker.hash_type,
+                    self.kracker.hash_digest_with_metadata,
+                    self.kracker.stop_event,
+                    self.kracker.operation,
+                    self.kracker.path_to_passwords,
+                    self.kracker.rules_file,
+                    self.kracker.max_expansions_per_word,
+                    self.kracker.max_candidates,
+                ),
+            )
+            task_fn = crack_range
+        else:
+            executor = ProcessPoolExecutor(
+                max_workers=self.kracker.workers,
+                initializer=init_worker,
+                initargs=(self.kracker.hash_type, self.kracker.hash_digest_with_metadata, self.kracker.stop_event),
+            )
+            task_fn = crack_chunk
         try:
             print(f"{LIGHT_YELLOW}Starting batch preloading... {RESET}")
             self.batch_man.preload_batches()
@@ -260,7 +276,7 @@ class Workers:
                             break
                         if self.kracker.stop_event.is_set():
                             break
-                        future = executor.submit(crack_chunk, batch)
+                        future = executor.submit(task_fn, batch)
                         futures.append(future)
 
                     # Process completed futures
@@ -300,8 +316,14 @@ class Workers:
     def process_task_result(self, task_result):
         """Process the result of a completed future."""
         try:
-            results, chunk_count = task_result.result()  # Expecting a tuple
-            self.reporter.summary_log["total_count"] += chunk_count
+            results, meta = task_result.result()  # Expecting a tuple
+            if isinstance(meta, dict):
+                verified_count = meta.get("verified_count", 0)
+                self.reporter.summary_log["total_count"] += verified_count
+                self.kracker.base_words_processed += meta.get("base_words_processed", 0)
+                self.kracker.expanded_candidates += meta.get("expanded_generated", 0)
+            else:
+                self.reporter.summary_log["total_count"] += meta
 
             # Process all matches in the results list
             for target_hash, pwned_pwd in results.items():
@@ -312,7 +334,7 @@ class Workers:
                     tqdm.write(f"{GREEN}[MATCH!] --> {pwned_pwd} --> {target_hash}{RESET}")
                     self.kracker.found_flag["found"] += 1
 
-            return True, chunk_count
+            return True, meta
         
         except Exception as e:
             import traceback

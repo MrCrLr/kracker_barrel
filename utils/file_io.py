@@ -60,3 +60,8 @@ def yield_dictionary_batches(path_to_passwords, batch_size):
 def get_number_of_passwords(path_to_passwords):
     with path_to_passwords.open("r", encoding="latin-1") as file:
         return sum(1 for _ in file)
+
+
+def count_wordlist_entries(path_to_passwords):
+    with path_to_passwords.open("r", encoding="latin-1", errors="replace") as file:
+        return sum(1 for line in file if line.strip())
